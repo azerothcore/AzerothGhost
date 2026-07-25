@@ -124,6 +124,7 @@ type aiLogicMock struct {
 func (m *aiLogicMock) GetPosition() (x, y, z, o float32)         { return 0, 0, 0, 0 }
 func (m *aiLogicMock) MoveTo(x, y, z float32) error               { m.moves++; return nil }
 func (m *aiLogicMock) StopMoving() error                          { return nil }
+func (m *aiLogicMock) IsMoving() bool                             { return false }
 func (m *aiLogicMock) AttackTarget(g uint64) error                { m.casts = append(m.casts, "attack@"+fmt.Sprint(g)); return nil }
 func (m *aiLogicMock) StopAttack() error                          { return nil }
 func (m *aiLogicMock) SetTarget(g uint64) error                   { m.target = g; return nil }

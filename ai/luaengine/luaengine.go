@@ -9,6 +9,7 @@ package luaengine
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	lua "github.com/Shopify/go-lua"
 
@@ -21,6 +22,7 @@ type BotAPI interface {
 	GetPosition() (x, y, z, o float32)
 	MoveTo(x, y, z float32) error
 	StopMoving() error
+	IsMoving() bool
 
 	// Combat
 	AttackTarget(guid uint64) error
@@ -92,6 +94,8 @@ type UnitInfo struct {
 	Faction   uint32
 	NPCFlags  uint32
 	Flags     uint32
+	DynFlags  uint32
+	Lootable  bool
 }
 
 // Engine wraps a Lua state and provides methods to load/run scripts.
@@ -136,6 +140,12 @@ func (e *Engine) registerBotFunctions() {
 		msg, _ := l.ToString(1)
 		e.bot.Log("[Lua] %s", msg)
 		return 0
+	})
+
+	// bot.now_ms() -> wall-clock milliseconds (prefer over os.clock for cooldowns)
+	e.setFunc("now_ms", func(l *lua.State) int {
+		l.PushNumber(float64(time.Now().UnixMilli()))
+		return 1
 	})
 
 	// bot.get_position() -> x, y, z, o
@@ -191,6 +201,12 @@ func (e *Engine) registerBotFunctions() {
 	e.setFunc("stop_moving", func(l *lua.State) int {
 		e.bot.StopMoving()
 		return 0
+	})
+
+	// bot.is_moving() -> bool
+	e.setFunc("is_moving", func(l *lua.State) int {
+		l.PushBoolean(e.bot.IsMoving())
+		return 1
 	})
 
 	// bot.attack(guid)  -- accepts number or string (for 64-bit GUID safety)
@@ -527,6 +543,12 @@ func pushUnitInfo(l *lua.State, u *UnitInfo) {
 
 	l.PushNumber(float64(u.Flags))
 	l.SetField(-2, "flags")
+
+	l.PushNumber(float64(u.DynFlags))
+	l.SetField(-2, "dyn_flags")
+
+	l.PushBoolean(u.Lootable)
+	l.SetField(-2, "lootable")
 }
 
 // DoString executes Lua code.

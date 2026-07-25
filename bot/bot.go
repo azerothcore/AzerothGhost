@@ -124,6 +124,7 @@ type Bot struct {
 	lootMu              sync.Mutex
 	lastLootAttemptGUID uint64
 	lastLootAttemptAt   time.Time
+	lastAttackSwingAt   time.Time
 	lastCastTime    time.Time // GCD tracking
 	lastVictoryRush bool      // Victory Rush proc available
 
@@ -2312,11 +2313,9 @@ func (b *Bot) moveToPoint(x, y, z float32) {
 		b.world.UpdatePosition(cx, cy, cz, co)
 	}
 
-	// Throttle repaths aggressively while already walking.
-	// Lua AI (and some scripts) call bot.move_to every AI tick (~200ms) with a
-	// live target position. Without this, SetPath restarts every tick and
-	// movement looks jerky compared to the native grind/pursue path, which only
-	// repaths about once per second.
+	// Throttle repaths hard while walking. Live mob chase calls move_to every
+	// AI tick with a slightly new XYZ; re-SetPath is what makes movement look
+	// like constant direction changes.
 	if b.isMoving && !b.lastMoveCommandTime.IsZero() {
 		since := now.Sub(b.lastMoveCommandTime)
 		ddx := x - b.lastMoveCommandPos[0]
@@ -2324,25 +2323,25 @@ func (b *Bot) moveToPoint(x, y, z float32) {
 		ddz := z - b.lastMoveCommandPos[2]
 		destMoved2 := ddx*ddx + ddy*ddy
 
-		// Already heading to nearly the same place: keep the current path.
-		if destMoved2 < 9.0 && math.Abs(float64(ddz)) < 4.0 && since < time.Second {
+		// Sticky: same-ish dest for 1.5s — never repath.
+		if destMoved2 < 25.0 && math.Abs(float64(ddz)) < 5.0 && since < 1500*time.Millisecond {
 			b.movementMu.Unlock()
 			return
 		}
-		// Target only shifted a little (typical mob drift): repath at most ~1.3Hz.
-		if destMoved2 < 36.0 && math.Abs(float64(ddz)) < 6.0 && since < 750*time.Millisecond {
+		// Moderate mob drift: repath at most ~0.67Hz.
+		if destMoved2 < 64.0 && math.Abs(float64(ddz)) < 8.0 && since < 1200*time.Millisecond {
 			b.movementMu.Unlock()
 			return
 		}
-		// Hard floor: never repath more often than 400ms while already moving.
-		if since < 400*time.Millisecond {
+		// Absolute floor while moving.
+		if since < 700*time.Millisecond {
 			b.movementMu.Unlock()
 			return
 		}
-		// Path already ends near the requested destination — no need to recompute.
+		// Path already ends near requested dest.
 		if ex, ey, ez, ok := b.moveController.Destination(); ok {
 			edx, edy, edz := ex-x, ey-y, ez-z
-			if edx*edx+edy*edy < 9.0 && math.Abs(float64(edz)) < 4.0 {
+			if edx*edx+edy*edy < 16.0 && math.Abs(float64(edz)) < 5.0 {
 				b.movementMu.Unlock()
 				return
 			}
@@ -2600,14 +2599,22 @@ func (b *Bot) FaceTarget(guid uint64) bool {
 	if u == nil {
 		return false
 	}
-	px, py, _, _ := b.GetPosition()
+	px, py, _, po := b.GetPosition()
 	dx := u.PosX - px
 	dy := u.PosY - py
 	fo := float32(math.Atan2(float64(dy), float64(dx)))
-	// Lua AI faces every tick while chasing. A stationary SET_FACING (no FORWARD
-	// flag) while the controller is still walking makes the server stop
-	// extrapolating forward motion — the classic "choppy Lua movement" symptom.
-	// Use the moving variant whenever a path is active.
+	// Skip micro facing updates — spam breaks auto-attack anim and jerks movement.
+	d := fo - po
+	for d > math.Pi {
+		d -= 2 * math.Pi
+	}
+	for d < -math.Pi {
+		d += 2 * math.Pi
+	}
+	if math.Abs(float64(d)) < 0.35 { // ~20 degrees
+		return true
+	}
+	// While pathing, keep FORWARD flag; standing melee uses plain set facing.
 	if b.movementActive() {
 		_ = b.world.SetFacingMoving(fo)
 	} else {
@@ -2626,11 +2633,11 @@ func (b *Bot) MoveTo(x, y, z float32) error {
 }
 
 func (b *Bot) StopMoving() error {
-	wasMoving := b.movementActive()
-	b.stopCurrentMove()
-	if !wasMoving {
-		return b.world.MoveStop()
+	if !b.movementActive() {
+		// Already stopped — do not re-send MoveStop (interrupts attack anim / idles).
+		return nil
 	}
+	b.stopCurrentMove()
 	return nil
 }
 
@@ -2688,14 +2695,22 @@ func generateUniqueCharName(seed int) string {
 }
 
 func (b *Bot) AttackTarget(guid uint64) error {
-	// Avoid CMSG_SET_SELECTION spam when already on this target / swinging it.
+	if b.world == nil {
+		return nil
+	}
+	// Avoid CMSG_SET_SELECTION spam when already on this target.
 	if b.world.TargetGUID() != guid {
 		_ = b.world.SetTarget(guid)
 	}
-	if b.world.AttackingGUID() == guid {
+	// Keep auto-attack alive: re-issue ATTACKSWING at most every 1.5s while on
+	// the same target. Calling only once often loses server-side swing after
+	// range/facing glitches or MoveStop, so the client shows no attack anim.
+	if b.world.AttackingGUID() == guid && !b.lastAttackSwingAt.IsZero() &&
+		time.Since(b.lastAttackSwingAt) < 1500*time.Millisecond {
 		return nil
 	}
 	b.logDecision("ATTACK_SWING guid=%d", guid)
+	b.lastAttackSwingAt = time.Now()
 	return b.world.AttackSwing(guid)
 }
 
@@ -2708,6 +2723,11 @@ func (b *Bot) SetTarget(guid uint64) error {
 		return nil
 	}
 	return b.world.SetTarget(guid)
+}
+
+// IsMoving reports whether the movement controller is mid-path.
+func (b *Bot) IsMoving() bool {
+	return b.movementActive()
 }
 
 func (b *Bot) CastSpell(spellID uint32, targetGUID uint64) error {
@@ -2831,6 +2851,7 @@ func (b *Bot) GetUnitInfo(guid uint64) *luaengine.UnitInfo {
 }
 
 func (b *Bot) worldObjToUnitInfo(obj *client.WorldObject) luaengine.UnitInfo {
+	dyn := obj.Value(client.UnitDynamicFlags)
 	return luaengine.UnitInfo{
 		GUID:      obj.GUID,
 		Entry:     obj.Entry,
@@ -2847,6 +2868,8 @@ func (b *Bot) worldObjToUnitInfo(obj *client.WorldObject) luaengine.UnitInfo {
 		Faction:   obj.Value(client.UnitFieldFaction),
 		NPCFlags:  obj.Value(client.UnitNPCFlags),
 		Flags:     obj.Value(client.UnitFieldFlags),
+		DynFlags:  dyn,
+		Lootable:  dyn&client.UnitDynflagLootable != 0,
 	}
 }
 
