@@ -100,10 +100,15 @@ function on_tick()
                     use_abilities(target_guid)
                 end
             else
-                -- Target is dead, try to loot
+                -- Target is dead, try to loot (throttled: once per corpse)
                 if target_guid ~= 0 then
-                    bot.loot_all(target_guid)
+                    local now = os.clock()
+                    if not last_loot_time or (now - last_loot_time) > 2.0 then
+                        bot.loot_all(target_guid)
+                        last_loot_time = now
+                    end
                     current_target = 0
+                    bot.set_target(0)
                 end
             end
         end

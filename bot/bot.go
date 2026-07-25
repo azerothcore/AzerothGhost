@@ -120,7 +120,10 @@ type Bot struct {
 	targetCacheTime     time.Time
 
 	// Combat state
-	lastLootGUID    uint64
+	lastLootGUID        uint64
+	lootMu              sync.Mutex
+	lastLootAttemptGUID uint64
+	lastLootAttemptAt   time.Time
 	lastCastTime    time.Time // GCD tracking
 	lastVictoryRush bool      // Victory Rush proc available
 
@@ -149,6 +152,8 @@ type Bot struct {
 	// Follows zero-overhead rule: nothing allocated or written on normal paths.
 	validationFile *os.File
 	validationEnc  *json.Encoder
+	validationMu   sync.Mutex
+	validationSeq  uint64
 }
 
 // myPos returns current player position (convenience to avoid direct field access on client).
@@ -222,6 +227,7 @@ func NewHeadlessBot(wc *client.WorldClient, cfg Config) *Bot {
 	}
 	b.ensureMovementController()
 	b.initNavigation()
+	b.wireValidationInstrumentation()
 
 	// Lua engine + AIBundle/LuaCode loading (same rules as full Run path)
 	b.lua = luaengine.NewEngine(b)
@@ -384,15 +390,47 @@ func (b *Bot) Run() BotResult {
 			b.log("Combat started (attacker: %d, victim: %d)", attacker, victim)
 		}
 	}
+	// OnAttackReject is the preferred path: classifies AC swing feedback so we
+	// never invent "dead" from BAD_FACING / NOT_IN_RANGE (protocol preconditions).
+	b.world.OnAttackReject = func(r client.AttackReject) {
+		switch r.Class {
+		case client.RejectTerminal:
+			if r.GUID != 0 {
+				b.markKnownDead(r.GUID)
+			}
+			b.logDecision("Server reject TERMINAL %s GUID=%d (drop target)", r.Reason, r.GUID)
+			// Target/combat already cleared in WorldClient for terminal.
+			b.stopCurrentMove()
+		case client.RejectTransient:
+			// Keep target; stop path only if we're not already closing in.
+			// Face correction helps BAD_FACING; move_to/pursue handles range.
+			b.logDecision("Server reject TRANSIENT %s GUID=%d (keep target, reapproach/face)", r.Reason, r.GUID)
+			if r.GUID != 0 && r.Reason == client.RejectReasonBadFacing {
+				_ = b.FaceTarget(r.GUID)
+			}
+		default:
+			// ATTACK_STOP / unknown: do not markKnownDead (ambiguous).
+			b.logDecision("Server reject %s GUID=%d class=%s (no dead mark)", r.Reason, r.GUID, r.Class)
+		}
+	}
+	// Legacy terminal-only callback (still fired by WorldClient for DEAD/CANT).
 	b.world.OnInvalidTarget = func(victimGUID uint64) {
-		b.markKnownDead(victimGUID)
-		b.logDecision("Server says target invalid (dead/friendly/etc), marking as such GUID=%d", victimGUID)
-		b.world.ClearTarget()
-		b.world.ClearCombat()
+		if victimGUID == 0 {
+			return
+		}
+		// OnAttackReject already handled markKnownDead for terminal; keep this
+		// as a safety net if something only fires OnInvalidTarget.
+		if !b.isKnownDead(victimGUID) {
+			b.markKnownDead(victimGUID)
+			b.logDecision("OnInvalidTarget GUID=%d (terminal safety net)", victimGUID)
+		}
 	}
 	b.world.OnLootOpened = func(lootGUID uint64, items []client.LootItem) {
 		b.handleLootOpened(lootGUID, items)
 	}
+
+	// Structured validation timeline + optional packet trace (no-op when disabled).
+	b.wireValidationInstrumentation()
 
 	// Start world client
 	worldErrCh := make(chan error, 1)
@@ -2822,12 +2860,28 @@ func (b *Bot) Loot(guid uint64) error {
 	return b.world.Loot(guid)
 }
 
+// LootAll opens loot, takes money, and releases without blocking the AI tick.
+// Previously this slept 700ms on the AI goroutine, which froze ticks and caused
+// loot spam under Lua grind (validation run: 122× CMSG_LOOT in ~45s).
+// Server responses arrive asynchronously via OnLootOpened / SMSG_LOOT_*.
 func (b *Bot) LootAll(guid uint64) error {
-	b.world.Loot(guid)
-	time.Sleep(500 * time.Millisecond)
-	b.world.LootMoney()
-	time.Sleep(200 * time.Millisecond)
-	b.world.LootRelease(guid)
+	if b.world == nil || guid == 0 {
+		return nil
+	}
+	// Throttle: at most one open/release cycle per GUID every 3s.
+	now := time.Now()
+	b.lootMu.Lock()
+	if b.lastLootAttemptGUID == guid && now.Sub(b.lastLootAttemptAt) < 3*time.Second {
+		b.lootMu.Unlock()
+		return nil
+	}
+	b.lastLootAttemptGUID = guid
+	b.lastLootAttemptAt = now
+	b.lootMu.Unlock()
+
+	_ = b.world.Loot(guid)
+	_ = b.world.LootMoney()
+	_ = b.world.LootRelease(guid)
 	return nil
 }
 
@@ -2974,6 +3028,11 @@ func (b *Bot) Stop() {
 
 // closeValidation closes the validation log writer if open. Safe to call multiple times.
 func (b *Bot) closeValidation() {
+	b.validationMu.Lock()
+	defer b.validationMu.Unlock()
+	if b.validationEnc != nil {
+		b.logValidationUnlocked("meta", map[string]interface{}{"msg": "validation_timeline_end"})
+	}
 	if b.validationFile != nil {
 		_ = b.validationFile.Close()
 		b.validationFile = nil
@@ -2981,17 +3040,54 @@ func (b *Bot) closeValidation() {
 	}
 }
 
-// logValidation writes a structured record to the validation JSONL (only if enabled).
-// Callers must gate: if b.config.ValidationMode && b.validationEnc != nil
+// logValidationUnlocked is used only while validationMu is already held (e.g. close).
+func (b *Bot) logValidationUnlocked(typ string, data map[string]interface{}) {
+	if b.validationEnc == nil {
+		return
+	}
+	now := time.Now().UTC()
+	b.validationSeq++
+	rec := map[string]interface{}{
+		"ts":   now.Format(time.RFC3339Nano),
+		"t_ns": now.UnixNano(),
+		"seq":  b.validationSeq,
+		"bot":  b.id,
+		"type": typ,
+	}
+	for k, v := range data {
+		if k == "type" || k == "ts" || k == "seq" || k == "bot" {
+			continue
+		}
+		rec[k] = v
+	}
+	_ = b.validationEnc.Encode(rec)
+}
+
+// logValidation writes a structured timeline record to the validation JSONL.
+// Safe for concurrent use (AI tick + packet reader). No-op when file not open.
+//
+// Common fields on every line:
+//
+//	ts (RFC3339Nano UTC), t_ns, seq, bot, type
 func (b *Bot) logValidation(typ string, data map[string]interface{}) {
 	if b.validationEnc == nil {
 		return
 	}
+	now := time.Now().UTC()
+	b.validationMu.Lock()
+	defer b.validationMu.Unlock()
+	b.validationSeq++
 	rec := map[string]interface{}{
-		"t":    time.Now().UnixNano(),
+		"ts":   now.Format(time.RFC3339Nano),
+		"t_ns": now.UnixNano(),
+		"seq":  b.validationSeq,
+		"bot":  b.id,
 		"type": typ,
 	}
 	for k, v := range data {
+		if k == "type" || k == "ts" || k == "seq" || k == "bot" {
+			continue
+		}
 		rec[k] = v
 	}
 	_ = b.validationEnc.Encode(rec)
@@ -3054,8 +3150,12 @@ func (b *Bot) Events() []BotEvent {
 
 func (b *Bot) setStatus(s BotStatus) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.status = s
+	b.mu.Unlock()
+	// Timeline phase changes (zero cost when validation log not open).
+	if b.validationEnc != nil {
+		b.logValidation("phase", map[string]interface{}{"status": string(s)})
+	}
 }
 
 // Status returns current status

@@ -173,6 +173,8 @@ const (
 	// Misc
 	SmsgNewWorld        uint16 = 0x003E
 	SmsgTransferPending uint16 = 0x003F
+	// MsgMoveWorldportAck (CMSG_WORLD_TELEPORT response / WORLDPORT_ACK) — 0x00DC
+	MsgMoveWorldportAck uint16 = 0x00DC
 	SmsgAiReaction      uint16 = 0x013C
 	SmsgPowerUpdate     uint16 = 0x0480
 
@@ -685,6 +687,14 @@ type WorldClient struct {
 	maxPower  uint32
 	level     uint32
 
+	// Protocol session phase (AC STATUS_* analogue for bots)
+	phaseMu              sync.RWMutex
+	phase                SessionPhase
+	lastTimeSyncCounter  uint32
+	timeSyncResponses    uint64
+	worldportAcksSent    uint64
+	teleportAcksSent     uint64
+
 	// Callbacks
 	logFunc            func(format string, args ...interface{})
 	OnCharList         func(chars []CharEnumEntry)
@@ -695,12 +705,29 @@ type WorldClient struct {
 	OnKill             func(victimGUID uint64)
 	OnObjectUpdate     func(guid uint64, obj *WorldObject)
 	OnObjectRemove     func(guid uint64)
-	OnLootOpened       func(lootGUID uint64, items []LootItem)
-	OnSpellCastResult  func(spellID uint32, success bool)
-	OnCombatStart      func(attackerGUID, victimGUID uint64)
-	OnCombatStop       func()
-	OnInvalidTarget    func(victimGUID uint64) // server told us attack on this is invalid (dead, friendly, etc.)
-	OnPacket           func(opcode uint16, data []byte)
+	OnLootOpened  func(lootGUID uint64, items []LootItem)
+	OnCombatStart func(attackerGUID, victimGUID uint64)
+	OnCombatStop  func()
+	// OnInvalidTarget is fired only for terminal rejects (dead / cant-attack).
+	// Prefer OnAttackReject for full taxonomy (transient vs terminal).
+	OnInvalidTarget func(victimGUID uint64)
+	// OnAttackReject fires for every classified attack-side server reject so bots
+	// can approach/face on transient errors instead of marking the unit dead.
+	OnAttackReject func(r AttackReject)
+	// OnPacket is invoked for every received world opcode (before handlers).
+	OnPacket func(opcode uint16, data []byte)
+	// OnPacketSend is invoked for every outbound world opcode (after build, before write).
+	OnPacketSend func(opcode uint16, data []byte)
+	// OnSpellCastResult reports SPELL_GO (success) or SPELL_FAILURE / CAST_FAILED.
+	// failReason is 0 on success; otherwise the server reason byte when available.
+	OnSpellCastResult func(spellID uint32, success bool, failReason uint8)
+	// OnSessionPhase fires on every session phase transition.
+	OnSessionPhase func(c SessionPhaseChange)
+	// OnProtocolWarning fires when we send gameplay opcodes outside PhaseInWorld.
+	OnProtocolWarning func(msg string, opcode uint16, phase SessionPhase)
+	// TraceLogOpcodes enables noisy console dumps of combat/spell server opcodes.
+	// Off by default; bots enable under --validation-mode --trace-packets.
+	TraceLogOpcodes bool
 }
 
 // NewWorldClient creates a world client
@@ -726,14 +753,14 @@ func NewWorldClient(username string, sessionKey []byte, logFunc func(string, ...
 
 // Connect connects to the world server
 func (w *WorldClient) Connect(worldAddr string) error {
+	// Prefer loopback when realmlist points at this host's LAN IP (avoids hairpin NAT).
+	worldAddr = strings.Replace(worldAddr, "192.168.178.110", "127.0.0.1", -1)
+
 	var err error
 	w.conn, err = net.DialTimeout("tcp", worldAddr, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("connect to worldserver: %w", err)
 	}
-
-	// give a rest for my router
-	worldAddr = strings.Replace(worldAddr, "192.168.178.110", "127.0.0.1", -1)
 
 	// Apply TCP socket optimizations
 	if tcp, ok := w.conn.(*net.TCPConn); ok {
@@ -842,6 +869,7 @@ func (w *WorldClient) handleAuthChallenge() error {
 
 	// Set up encryption
 	w.setupEncryption()
+	w.setPhase(PhaseConnected, "CMSG_AUTH_SESSION+crypto")
 
 	return nil
 }
@@ -1020,6 +1048,10 @@ func (w *WorldClient) readPacket() (uint16, []byte, error) {
 }
 
 func (w *WorldClient) sendPacketUnencrypted(opcode uint16, data []byte) error {
+	w.checkOutboundPhase(opcode)
+	if w.OnPacketSend != nil {
+		w.OnPacketSend(opcode, data)
+	}
 	header := make([]byte, 6)
 	binary.BigEndian.PutUint16(header[0:2], uint16(len(data)+4))
 	binary.LittleEndian.PutUint32(header[2:6], uint32(opcode))
@@ -1032,6 +1064,10 @@ func (w *WorldClient) sendPacketUnencrypted(opcode uint16, data []byte) error {
 }
 
 func (w *WorldClient) sendPacket(opcode uint16, data []byte) error {
+	w.checkOutboundPhase(opcode)
+	if w.OnPacketSend != nil {
+		w.OnPacketSend(opcode, data)
+	}
 	// Client sends: size(2, big-endian) + opcode(4, little-endian)
 	header := make([]byte, 6)
 	binary.BigEndian.PutUint16(header[0:2], uint16(len(data)+4))
@@ -1055,23 +1091,14 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 		w.OnPacket(opcode, data)
 	}
 
-	// Log combat/targeting/spell server opcodes so we can see error notifications
-	// when set_target / attack fails (user request to log what server sends on errors)
-	if (opcode >= 0x0130 && opcode <= 0x014F) || opcode == SmsgAiReaction {
+	// Console hex dumps are opt-in (TraceLogOpcodes). Default off to avoid drowning
+	// load tests; validation timeline uses OnPacket JSONL instead.
+	if w.TraceLogOpcodes && IsHighValueTraceOpcode(opcode) {
 		short := data
 		if len(short) > 32 {
 			short = short[:32]
 		}
-		w.log("SERVER OPCODE 0x%04X len=%d data=% x", opcode, len(data), short)
-	}
-
-	// Also log any other potentially interesting error/response opcodes (e.g. 0x01xx range for various failures)
-	if opcode >= 0x0100 && opcode < 0x0130 {
-		short := data
-		if len(short) > 16 {
-			short = short[:16]
-		}
-		w.log("SERVER OPCODE (possible error) 0x%04X len=%d data=% x", opcode, len(data), short)
+		w.log("SMSG %s (0x%04X) len=%d data=% x", OpcodeName(opcode), opcode, len(data), short)
 	}
 
 	switch opcode {
@@ -1104,13 +1131,13 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 	case SmsgAttackStop:
 		w.handleAttackStop(data)
 	case SmsgAttackSwingNotInRange:
-		w.handleAttackSwingError(data, "NOT_IN_RANGE")
+		w.handleAttackSwingError(data, RejectReasonNotInRange, SmsgAttackSwingNotInRange)
 	case SmsgAttackSwingBadFacing:
-		w.handleAttackSwingError(data, "BAD_FACING")
+		w.handleAttackSwingError(data, RejectReasonBadFacing, SmsgAttackSwingBadFacing)
 	case SmsgAttackSwingDeadTarget:
-		w.handleAttackSwingError(data, "DEAD_TARGET")
+		w.handleAttackSwingError(data, RejectReasonDeadTarget, SmsgAttackSwingDeadTarget)
 	case SmsgAttackSwingCantAttack:
-		w.handleAttackSwingError(data, "CANT_ATTACK")
+		w.handleAttackSwingError(data, RejectReasonCantAttack, SmsgAttackSwingCantAttack)
 	case SmsgAttackerStateUpdate:
 		w.handleAttackerStateUpdate(data)
 
@@ -1121,6 +1148,8 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 		w.handleSpellGo(data)
 	case SmsgSpellFailure:
 		w.handleSpellFailure(data)
+	case SmsgCastFailed:
+		w.handleCastFailed(data)
 	case SmsgSpellCooldown:
 		w.handleSpellCooldown(data)
 	case SmsgCooldownEvent:
@@ -1207,6 +1236,7 @@ func (w *WorldClient) handleAuthResponse(data []byte) {
 	}
 
 	w.log("World auth successful")
+	w.setPhase(PhaseAuthed, "SMSG_AUTH_RESPONSE")
 }
 
 func (w *WorldClient) handleCharEnum(data []byte) {
@@ -1307,10 +1337,11 @@ func (w *WorldClient) handleLoginVerifyWorld(data []byte) {
 		binary.Read(r, binary.LittleEndian, &w.posZ)
 		binary.Read(r, binary.LittleEndian, &w.orientation)
 		w.mapID = mapID
-		// (debug log removed)
+		w.log("Login verified map=%d pos=(%.1f,%.1f,%.1f)", mapID, w.posX, w.posY, w.posZ)
 	} else {
 		w.log("Login verified - character is in world!")
 	}
+	w.setPhase(PhaseInWorld, "SMSG_LOGIN_VERIFY_WORLD")
 	select {
 	case <-w.loginDone:
 	default:
@@ -1328,6 +1359,11 @@ func (w *WorldClient) handleTimeSyncReq(data []byte) {
 	binary.Write(buf, binary.LittleEndian, counter)
 	binary.Write(buf, binary.LittleEndian, uint32(getMSTime()))
 
+	w.phaseMu.Lock()
+	w.lastTimeSyncCounter = counter
+	w.timeSyncResponses++
+	w.phaseMu.Unlock()
+
 	w.sendPacket(CmsgTimeSyncResp, buf.Bytes())
 }
 
@@ -1344,6 +1380,7 @@ func (w *WorldClient) handleLogoutResponse(data []byte) {
 func (w *WorldClient) handleLogoutComplete() {
 	w.log("Logout complete")
 	w.stopped = true
+	w.setPhase(PhaseLogout, "SMSG_LOGOUT_COMPLETE")
 	select {
 	case <-w.logoutDone:
 	default:
@@ -1415,6 +1452,7 @@ func (w *WorldClient) LoginCharacter(guid uint64) error {
 	w.packedGUID = append(w.packedGUID, packGUID[:size]...)
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, guid)
+	w.setPhase(PhaseLoading, "CMSG_PLAYER_LOGIN")
 	return w.sendPacket(CmsgPlayerLogin, buf.Bytes())
 }
 
@@ -2375,66 +2413,43 @@ func (w *WorldClient) handleAttackStop(data []byte) {
 	attackerGUID, _ := readPackedGUID(r)
 	victimGUID, _ := readPackedGUID(r)
 
-	if attackerGUID == w.charGUID {
-		w.combatMu.Lock()
-		w.attackingGUID = 0
-		w.combatMu.Unlock()
-
-		// Server told us to stop attacking this victim. This is authoritative feedback
-		// that the target is no longer valid (dead, friendly, out of range, etc.).
-		// Mark it invalid in our cache immediately and clear if it was our target.
-		if victimGUID != 0 {
-			w.MarkObjectDead(victimGUID)
-			if w.targetGUID == victimGUID {
-				w.ClearTarget()
-				w.ClearCombat()
-			}
-			w.combatMu.Lock()
-			w.inCombat = false
-			w.combatMu.Unlock()
-			if w.OnInvalidTarget != nil {
-				w.OnInvalidTarget(victimGUID)
-			}
-		} else if w.targetGUID != 0 {
-			// ATTACKSTOP with only self pack (no victim) means the swing target was invalid (no pEnemy)
-			// Clear the current target so we don't keep swinging at a bad GUID.
-			w.MarkObjectDead(w.targetGUID)
-			w.ClearTarget()
-			w.ClearCombat()
-			w.combatMu.Lock()
-			w.inCombat = false
-			w.combatMu.Unlock()
-			if w.OnInvalidTarget != nil {
-				w.OnInvalidTarget(w.targetGUID)
-			}
-		}
+	// SMSG_ATTACK_STOP alone is ambiguous: normal end of swing, invalid target,
+	// or death. Do NOT invent death here — terminal state comes from
+	// SMSG_ATTACKSWING_DEAD_TARGET / CANT_ATTACK, health updates, or OnKill.
+	if attackerGUID != w.charGUID && (attackerGUID&0xFFFFFFFF) != (w.charGUID&0xFFFFFFFF) {
+		return
 	}
 
-	// Also, if the stop packet only contains the player's GUID (as in the log data 07 f9 64 01 which is player's pack),
-	// and we have a current target, clear it. This is what AC sends when !pEnemy or !IsValidAttackTarget on swing.
-	if attackerGUID == w.charGUID && victimGUID == 0 && w.targetGUID != 0 {
-		w.MarkObjectDead(w.targetGUID)
+	w.combatMu.Lock()
+	w.attackingGUID = 0
+	w.combatMu.Unlock()
+
+	guid := victimGUID
+	if guid == 0 {
+		guid = w.targetGUID
+	}
+
+	// No victim payload often means "could not resolve enemy" — drop selection
+	// so we re-acquire, but still do not mark dead (might be facing/range/phase).
+	if victimGUID == 0 && w.targetGUID != 0 {
 		w.ClearTarget()
 		w.ClearCombat()
-		w.combatMu.Lock()
-		w.inCombat = false
-		w.combatMu.Unlock()
-		if w.OnInvalidTarget != nil {
-			w.OnInvalidTarget(w.targetGUID)
-		}
 	}
 
-	// Also mark if we see stop for our current target (even if not attacker? rare but safe)
-	if victimGUID != 0 && w.targetGUID == victimGUID {
-		w.MarkObjectDead(victimGUID)
-	}
+	w.emitAttackReject(AttackReject{
+		GUID:   guid,
+		Reason: RejectReasonAttackStop,
+		Class:  RejectUnknown,
+		Opcode: SmsgAttackStop,
+	})
 }
 
-// handleAttackSwingError handles the SMSG_ATTACKSWING_* notifications sent by server
-// when our CMSG_ATTACKSWING was for an incorrect target (per AC Player::Attack + HandleAttackSwingOpcode).
-// These are the packets the user referred to: "If the target is incorrect, then server will send some packet notifying it."
-func (w *WorldClient) handleAttackSwingError(data []byte, reason string) {
-	w.log("SMSG_ATTACKSWING_%s (len=%d) - server rejected attack swing (incorrect target per AC rules) data=% x", reason, len(data), data)
+// handleAttackSwingError handles SMSG_ATTACKSWING_* notifications from AC when
+// CMSG_ATTACKSWING preconditions fail (range, facing, dead, cant-attack).
+// Transient reasons keep the target; terminal reasons mark dead and clear.
+func (w *WorldClient) handleAttackSwingError(data []byte, reason string, opcode uint16) {
+	class := ClassifyAttackSwingReason(reason)
+	w.log("SMSG_ATTACKSWING_%s class=%s (len=%d) data=% x", reason, class, len(data), data)
 
 	victim := uint64(0)
 	if len(data) >= 8 {
@@ -2446,20 +2461,52 @@ func (w *WorldClient) handleAttackSwingError(data []byte, reason string) {
 			victim = g
 		}
 	}
+	if victim == 0 {
+		victim = w.targetGUID
+		if victim == 0 {
+			victim = w.attackingGUID
+		}
+	}
 	if victim != 0 {
 		w.log("  swing error victim GUID=%d (current target=%d attacking=%d)", victim, w.targetGUID, w.attackingGUID)
 	}
 
-	// Authoritative: this target is bad for combat. Clear state and notify upper layers (like bot OnInvalidTarget).
-	if (victim != 0 && (w.targetGUID == victim || w.attackingGUID == victim)) || w.targetGUID != 0 {
+	// Always stop local auto-attack swing; posture correction may re-issue ATTACKSWING.
+	w.combatMu.Lock()
+	w.attackingGUID = 0
+	w.combatMu.Unlock()
+
+	switch class {
+	case RejectTerminal:
+		if victim != 0 {
+			w.MarkObjectDead(victim)
+		}
 		w.ClearTarget()
 		w.ClearCombat()
-		if victim != 0 {
-			w.MarkObjectDead(victim) // conservative; may be temp (facing/range) not dead
-		}
-		if w.OnInvalidTarget != nil {
+		if w.OnInvalidTarget != nil && victim != 0 {
 			w.OnInvalidTarget(victim)
 		}
+	case RejectTransient:
+		// Keep target + selection so AI can approach / face and retry.
+		// Do not MarkObjectDead — that was the choppy "phantom dead mobs" bug.
+	default:
+		// Unknown: clear combat flag only, leave target unless none.
+		w.combatMu.Lock()
+		w.inCombat = false
+		w.combatMu.Unlock()
+	}
+
+	w.emitAttackReject(AttackReject{
+		GUID:   victim,
+		Reason: reason,
+		Class:  class,
+		Opcode: opcode,
+	})
+}
+
+func (w *WorldClient) emitAttackReject(r AttackReject) {
+	if w.OnAttackReject != nil {
+		w.OnAttackReject(r)
 	}
 }
 
@@ -2571,7 +2618,7 @@ func (w *WorldClient) handleSpellGo(data []byte) {
 
 	if casterGUID == w.charGUID {
 		if w.OnSpellCastResult != nil {
-			w.OnSpellCastResult(spellID, true)
+			w.OnSpellCastResult(spellID, true, 0)
 		}
 	}
 }
@@ -2592,8 +2639,23 @@ func (w *WorldClient) handleSpellFailure(data []byte) {
 	if casterGUID == w.charGUID {
 		w.log("Spell %d FAILED (reason=%d)", spellID, reason)
 		if w.OnSpellCastResult != nil {
-			w.OnSpellCastResult(spellID, false)
+			w.OnSpellCastResult(spellID, false, reason)
 		}
+	}
+}
+
+// handleCastFailed processes SMSG_CAST_FAILED (client-facing cast result).
+// Layout (3.3.5a): castCount(u8), spellId(u32), result(u8), optional args.
+func (w *WorldClient) handleCastFailed(data []byte) {
+	if len(data) < 6 {
+		return
+	}
+	castCount := data[0]
+	spellID := binary.LittleEndian.Uint32(data[1:5])
+	reason := data[5]
+	w.log("SMSG_CAST_FAILED spell=%d reason=%d castCount=%d", spellID, reason, castCount)
+	if w.OnSpellCastResult != nil {
+		w.OnSpellCastResult(spellID, false, reason)
 	}
 }
 
@@ -3772,13 +3834,8 @@ func (w *WorldClient) handleMoveTeleport(data []byte) {
 	}
 	r := bytes.NewReader(data)
 	guid, _ := readPackedGUID(r)
-	w.objectsMu.RLock()
-	obj, ok := w.objects[guid]
-	w.objectsMu.RUnlock()
-	if !ok || obj == nil {
-		return
-	}
-	// similar to ack, has movement block with new pos
+
+	// Movement info block (same layout used elsewhere)
 	var moveFlags uint32
 	binary.Read(r, binary.LittleEndian, &moveFlags)
 	var moveFlags2 uint16
@@ -3790,14 +3847,40 @@ func (w *WorldClient) handleMoveTeleport(data []byte) {
 	binary.Read(r, binary.LittleEndian, &ny)
 	binary.Read(r, binary.LittleEndian, &nz)
 	binary.Read(r, binary.LittleEndian, &no)
-	obj.PosX = nx
-	obj.PosY = ny
-	obj.PosZ = nz
-	obj.Orientation = no
-	obj.LastPosUpdate = time.Now()
-	obj.LastSeen = time.Now()
-	obj.IsMoving = false
-	// (debug log removed)
+
+	// Update object cache for any unit
+	w.objectsMu.Lock()
+	if obj := w.objects[guid]; obj != nil {
+		obj.PosX = nx
+		obj.PosY = ny
+		obj.PosZ = nz
+		obj.Orientation = no
+		obj.LastPosUpdate = time.Now()
+		obj.LastSeen = time.Now()
+		obj.IsMoving = false
+	}
+	w.objectsMu.Unlock()
+
+	// Self near-teleport: update local pose, ACK, resume in-world.
+	// Counter is typically present after movement block on some builds; use 0 if absent.
+	if guid == w.charGUID || (w.charGUID != 0 && (guid&0xFFFFFFFF) == (w.charGUID&0xFFFFFFFF)) {
+		w.setPhase(PhaseNearTeleport, "SMSG_MOVE_TELEPORT")
+		w.posX, w.posY, w.posZ, w.orientation = nx, ny, nz, no
+		var counter uint32
+		_ = binary.Read(r, binary.LittleEndian, &counter)
+
+		ackBuf := new(bytes.Buffer)
+		writePackedGUID(ackBuf, w.charGUID)
+		binary.Write(ackBuf, binary.LittleEndian, counter)
+		binary.Write(ackBuf, binary.LittleEndian, uint32(getMSTime()))
+		w.sendPacket(MsgMoveTeleportAck, ackBuf.Bytes())
+
+		w.phaseMu.Lock()
+		w.teleportAcksSent++
+		w.phaseMu.Unlock()
+		w.setPhase(PhaseInWorld, "MSG_MOVE_TELEPORT_ACK")
+		_ = w.SendHeartbeat()
+	}
 }
 
 func (w *WorldClient) handleNewWorld(data []byte) {
@@ -3813,7 +3896,8 @@ func (w *WorldClient) handleNewWorld(data []byte) {
 	binary.Read(r, binary.LittleEndian, &newZ)
 	binary.Read(r, binary.LittleEndian, &newO)
 
-	// (debug log removed)
+	w.log("SMSG_NEW_WORLD map=%d pos=(%.1f,%.1f,%.1f)", mapID, newX, newY, newZ)
+	w.setPhase(PhaseFarTransfer, "SMSG_NEW_WORLD")
 
 	w.mapID = mapID
 	w.posX = newX
@@ -3826,25 +3910,31 @@ func (w *WorldClient) handleNewWorld(data []byte) {
 	w.objects = make(map[uint64]*WorldObject)
 	w.objectsMu.Unlock()
 
-	// Send MSG_MOVE_WORLDPORT_ACK
-	w.sendPacket(0x00DC, nil) // CMSG_WORLD_PORT_RESPONSE = 0x00DC
+	// MSG_MOVE_WORLDPORT_ACK — required before AC accepts STATUS_LOGGEDIN gameplay again
+	w.sendPacket(MsgMoveWorldportAck, nil)
+	w.phaseMu.Lock()
+	w.worldportAcksSent++
+	w.phaseMu.Unlock()
+	w.setPhase(PhaseInWorld, "MSG_MOVE_WORLDPORT_ACK")
 }
 
+// handleMoveTeleportAck handles legacy/misrouted MSG_MOVE_TELEPORT_ACK as SMSG
+// (kept for compatibility with older packet paths that mirrored the opcode).
 func (w *WorldClient) handleMoveTeleportAck(data []byte) {
 	if len(data) < 10 {
 		return
 	}
 	r := bytes.NewReader(data)
 	guid, _ := readPackedGUID(r)
-	if guid != w.charGUID {
+	if guid != w.charGUID && (guid&0xFFFFFFFF) != (w.charGUID&0xFFFFFFFF) {
 		return
 	}
 
-	// Read counter
+	w.setPhase(PhaseNearTeleport, "MSG_MOVE_TELEPORT_ACK(smsg)")
+
 	var counter uint32
 	binary.Read(r, binary.LittleEndian, &counter)
 
-	// Read movement block: moveFlags(4) + moveFlags2(2) + time(4) + posX(4) + posY(4) + posZ(4) + orientation(4)
 	var moveFlags uint32
 	binary.Read(r, binary.LittleEndian, &moveFlags)
 	var moveFlags2 uint16
@@ -3857,27 +3947,25 @@ func (w *WorldClient) handleMoveTeleportAck(data []byte) {
 	binary.Read(r, binary.LittleEndian, &newZ)
 	binary.Read(r, binary.LittleEndian, &newO)
 
-	// (debug log removed)
-
 	w.posX = newX
 	w.posY = newY
 	w.posZ = newZ
 	w.orientation = newO
 
-	// Clear all objects since we teleported
 	w.objectsMu.Lock()
 	w.objects = make(map[uint64]*WorldObject)
 	w.objectsMu.Unlock()
 
-	// Send acknowledgment: packed GUID + uint32 flags + uint32 time
 	ackBuf := new(bytes.Buffer)
 	writePackedGUID(ackBuf, w.charGUID)
-	binary.Write(ackBuf, binary.LittleEndian, uint32(0)) // flags
-	binary.Write(ackBuf, binary.LittleEndian, uint32(0)) // time
+	binary.Write(ackBuf, binary.LittleEndian, counter)
+	binary.Write(ackBuf, binary.LittleEndian, uint32(getMSTime()))
 	w.sendPacket(MsgMoveTeleportAck, ackBuf.Bytes())
-
-	// Send heartbeat at new position
-	w.SendHeartbeat()
+	w.phaseMu.Lock()
+	w.teleportAcksSent++
+	w.phaseMu.Unlock()
+	w.setPhase(PhaseInWorld, "MSG_MOVE_TELEPORT_ACK")
+	_ = w.SendHeartbeat()
 }
 
 func (w *WorldClient) getOrCreateObject(guid uint64) *WorldObject {

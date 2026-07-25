@@ -84,7 +84,7 @@ foundVerb:
 	accountPrefix := flag.String("account-prefix", "loadbot", "Account name prefix (orchestrator mode)")
 	accountPassword := flag.String("account-password", "loadbot", "Account password (orchestrator mode)")
 	dbDSN := flag.String("db-dsn", "acore:acore@tcp(127.0.0.1:3306)/acore_auth", "Auth database DSN (orchestrator mode)")
-	duration := flag.Duration("duration", 5*time.Minute, "Test duration (orchestrator mode)")
+	duration := flag.Duration("duration", 0, "Run duration for cli/orchestrator (0 = until Ctrl+C; orchestrator default applied if unset there)")
 
 	// Ergonomic config flags
 	profile := flag.String("profile", "", "Named profile to load (e.g. --profile local-ac). Looks in ~/.config/azghost/profiles/ and .azghost/profiles/")
@@ -248,6 +248,16 @@ func runCLI(c config.CLIConfig) {
 		b.Stop()
 	}()
 
+	// Optional wall-clock limit for CLI (validation / smoke runs).
+	if c.Duration > 0 {
+		fmt.Printf("  duration=%v\n", c.Duration)
+		go func() {
+			time.Sleep(c.Duration)
+			fmt.Println("\nCLI duration reached, stopping bot...")
+			b.Stop()
+		}()
+	}
+
 	result := b.Run()
 
 	fmt.Printf("\n=== Bot Result ===\n")
@@ -367,15 +377,19 @@ func runOrchestrator(c config.CLIConfig) {
 		localBots, _ = orch.LaunchLocal(assignments)
 	}
 
-	// Wait for duration or signal
-	fmt.Printf("Test running for %v (Ctrl+C to stop early)...\n", c.Duration)
+	// Wait for duration or signal (default 5m if --duration not set)
+	dur := c.Duration
+	if dur <= 0 {
+		dur = 5 * time.Minute
+	}
+	fmt.Printf("Test running for %v (Ctrl+C to stop early)...\n", dur)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 
 	select {
 	case <-sigCh:
 		fmt.Println("\nStopping test early...")
-	case <-time.After(c.Duration):
+	case <-time.After(dur):
 		fmt.Println("Test duration reached.")
 	}
 
