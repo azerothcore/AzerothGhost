@@ -12,11 +12,8 @@
 
 local ai = dofile("scripts/ai/init.lua")
 
--- enable core + class (init already wires warrior if class==1, but explicit for clarity)
-ai:enable("survive")
-ai:enable("grind")
-ai:enable("loot")
-ai:enable("melee")
+-- Core defaults include survive/rest/grind/loot/melee/ranged + class generics.
+ai:enable_default_strategies()
 ai:enable("generic_warrior")
 ai:enable("arms")  -- or "fury" / "prot" ; user can switch dynamically
 -- local spec = ai.detect_spec and ai.detect_spec() or nil; if spec then ai:enable(spec) end

@@ -146,6 +146,8 @@ foundVerb:
 			cliCfg.PathfindingAddress = *pathfindingAddr
 		case "lua-script":
 			cliCfg.LuaScript = *luaScript
+			// Passing a script always selects Lua AI (profile default is often "grind").
+			cliCfg.BotMode = "lua"
 		case "delete-existing-chars":
 			cliCfg.DeleteExistingChars = *deleteExistingChars
 		case "log-decisions-to-chat":

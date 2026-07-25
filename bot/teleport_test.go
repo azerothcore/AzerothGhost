@@ -82,3 +82,100 @@ func TestSummonNearTeleport_InterruptsAndFlagsLua(t *testing.T) {
 		t.Fatalf("world pose corrupted by updateMovement: (%v,%v,%v)", wx, wy, wz)
 	}
 }
+
+// TestChargeServerRelocate_DoesNotRubberBand: after a Charge-like server relocate,
+// updateMovement must not write the pre-charge path pose back over the new coords.
+func TestChargeServerRelocate_DoesNotRubberBand(t *testing.T) {
+	w := client.NewWorldClient("u", nil, func(string, ...interface{}) {})
+	w.UpdatePosition(10, 20, 30, 1.0)
+
+	b := NewHeadlessBot(w, Config{Mode: "lua", AITickMs: 200})
+	b.movementMu.Lock()
+	b.ensureMovementControllerLocked()
+	if b.moveController != nil {
+		// Simulate an active chase path from the charge cast position.
+		b.moveController.InitPositionFromWorld(10, 20, 30, 1.0)
+		b.isMoving = true
+	}
+	b.movementMu.Unlock()
+
+	// Server relocates player to charge destination (as MONSTER_MOVE would).
+	if b.world.OnServerRelocate == nil {
+		t.Fatal("OnServerRelocate not wired")
+	}
+	b.world.OnServerRelocate(100, 200, 40, 1.5, "monster_move_charge")
+	w.UpdatePosition(100, 200, 40, 1.5)
+
+	if b.movementActive() {
+		t.Fatal("expected path aborted after server relocate")
+	}
+	b.movementMu.Lock()
+	cx, cy, cz, _ := b.moveController.CurrentPosition()
+	b.movementMu.Unlock()
+	if cx != 100 || cy != 200 || cz != 40 {
+		t.Fatalf("controller pose=(%v,%v,%v) want post-charge", cx, cy, cz)
+	}
+
+	b.updateMovement()
+	wx, wy, wz, _, _ := w.Position()
+	if wx != 100 || wy != 200 || wz != 40 {
+		t.Fatalf("rubber-band: world pose became (%v,%v,%v)", wx, wy, wz)
+	}
+}
+
+// TestChargeRubberBand_WithActivePathSimulatesPreFix: while a local path is
+// active, a server relocate must AbortAndSnap so updateMovement cannot write the
+// pre-charge path pose over the charge landing (the live rubber-band bug).
+func TestChargeRubberBand_WithActivePathSimulatesPreFix(t *testing.T) {
+	w := client.NewWorldClient("u", nil, func(string, ...interface{}) {})
+	w.UpdatePosition(0, 0, 10, 0)
+
+	b := NewHeadlessBot(w, Config{Mode: "lua", AITickMs: 200})
+	// Active chase path from cast origin toward a far waypoint.
+	b.moveToPoint(200, 0, 10)
+	if !b.movementActive() {
+		t.Fatal("expected active path before charge")
+	}
+
+	// Charge landing (server + world pose).
+	const cx, cy, cz float32 = 50, 80, 12
+	b.world.OnServerRelocate(cx, cy, cz, 0.5, "monster_move_charge")
+	w.UpdatePosition(cx, cy, cz, 0.5)
+
+	if b.movementActive() {
+		t.Fatal("path should be aborted after relocate")
+	}
+
+	// Pre-fix: isMoving stayed true → updateMovement rewrote world to ~path start.
+	// Post-fix: path aborted → world pose stays at charge destination.
+	for i := 0; i < 10; i++ {
+		b.updateMovement()
+		x, y, z, _, _ := w.Position()
+		if abs32(x-cx) > 0.01 || abs32(y-cy) > 0.01 || abs32(z-cz) > 0.01 {
+			t.Fatalf("tick %d rubber-band: pos=(%v,%v,%v) want (%v,%v,%v)", i, x, y, z, cx, cy, cz)
+		}
+	}
+}
+
+func abs32(v float32) float32 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// TestCastChargeDoesNotAbortPathOnAttempt: a failed/pending Charge must not
+// cancel chase (that froze lvl-1 bots staring at mobs from 12 yards).
+func TestCastChargeDoesNotAbortPathOnAttempt(t *testing.T) {
+	w := client.NewWorldClient("u", nil, func(string, ...interface{}) {})
+	w.UpdatePosition(0, 0, 10, 0)
+	b := NewHeadlessBot(w, Config{Mode: "lua", AITickMs: 200})
+	b.moveToPoint(100, 0, 10)
+	if !b.movementActive() {
+		t.Fatal("need active path")
+	}
+	_ = b.CastSpell(100, 999)
+	if !b.movementActive() {
+		t.Fatal("Charge cast attempt must not abort chase path")
+	}
+}

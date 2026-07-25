@@ -161,6 +161,11 @@ type Bot struct {
 	teleportMu      sync.Mutex
 	teleportPending bool
 	teleportReason  string
+
+	// After CAST_FAILED NO_POWER (85), treat spell as not ready briefly so AI
+	// does not re-spam the same cast every tick while rage/mana regenerates.
+	noPowerMu    sync.Mutex
+	noPowerUntil map[uint32]time.Time
 }
 
 // myPos returns current player position (convenience to avoid direct field access on client).
@@ -236,6 +241,7 @@ func NewHeadlessBot(wc *client.WorldClient, cfg Config) *Bot {
 	b.initNavigation()
 	b.wireValidationInstrumentation()
 	b.wireTeleportHandling()
+	b.wireServerRelocateHandling()
 
 	// Lua engine + AIBundle/LuaCode loading (same rules as full Run path)
 	b.lua = luaengine.NewEngine(b)
@@ -410,11 +416,19 @@ func (b *Bot) Run() BotResult {
 			// Target/combat already cleared in WorldClient for terminal.
 			b.stopCurrentMove()
 		case client.RejectTransient:
-			// Keep target; stop path only if we're not already closing in.
-			// Face correction helps BAD_FACING; move_to/pursue handles range.
+			// Keep target; close the gap. Lua distance can be stale so we repath
+			// on NOT_IN_RANGE even if AI thinks we are already in melee.
 			b.logDecision("Server reject TRANSIENT %s GUID=%d (keep target, reapproach/face)", r.Reason, r.GUID)
 			if r.GUID != 0 && r.Reason == client.RejectReasonBadFacing {
 				_ = b.FaceTarget(r.GUID)
+			}
+			if r.GUID != 0 && r.Reason == client.RejectReasonNotInRange {
+				if t := b.world.GetObject(r.GUID); t != nil {
+					tx, ty, tz := t.InterpolatedPosition()
+					// Force a fresh path (clear throttle).
+					b.lastMoveCommandTime = time.Time{}
+					b.moveToPoint(tx, ty, tz)
+				}
 			}
 		default:
 			// ATTACK_STOP / unknown: do not markKnownDead (ambiguous).
@@ -441,6 +455,8 @@ func (b *Bot) Run() BotResult {
 	b.wireValidationInstrumentation()
 	// Summon / .go / portal: interrupt movement+combat and flag Lua to restart AI.
 	b.wireTeleportHandling()
+	// Charge / blink / server-forced player splines: snap movement controller.
+	b.wireServerRelocateHandling()
 
 	// Start world client
 	worldErrCh := make(chan error, 1)
@@ -1386,14 +1402,11 @@ func (b *Bot) buildHoggerBehavior() behaviortree.Node {
 				return false
 			}),
 			behaviortree.NewAction("attack_hogger", func(bb *behaviortree.Blackboard) behaviortree.Status {
-				// Pre-combat: use Battle Shout before engaging
+				// Pre-combat: Battle Shout (6673). Never cast 2457 here — that is Battle Stance.
 				if !battleShoutUsed {
 					if b.world.IsSpellReady(6673) {
 						b.log("Pre-combat: casting Battle Shout")
 						b.world.CastSpell(6673, 0)
-					} else if b.world.IsSpellReady(2457) {
-						b.log("Pre-combat: casting Battle Shout (Rank 1)")
-						b.world.CastSpell(2457, 0)
 					}
 					battleShoutUsed = true
 				}
@@ -2411,8 +2424,11 @@ func (b *Bot) moveToPoint(x, y, z float32) {
 			for j := 1; j < len(pts); j++ {
 				plen += pts[j-1].DistanceTo2D(pts[j])
 			}
-			if plen > straight*2.5 || len(pts) > 80 {
-				b.logDecision("crazy path in Durotar-like terrain, using direct")
+			// Reject huge detours (navmesh artifacts): more than 2× straight line
+			// or absurdly long paths send the bot running across the zone.
+			if straight > 1.0 && (plen > straight*2.0 || plen > straight+40 || len(pts) > 60) {
+				b.log("crazy path rejected (straight=%.1f path=%.1f n=%d) — direct line",
+					straight, plen, len(pts))
 				pts = simplifyAndDensifyPath([]navigation.Point3D{current, {X: x, Y: y, Z: z}}, 3.0, 1.0)
 			}
 		} else {
@@ -2666,6 +2682,60 @@ func (b *Bot) ConsumeTeleport() bool {
 	return true
 }
 
+// Spells that forcibly relocate the caster (Charge, Intercept, Blink, …).
+// On SPELL_GO we abort local pathing; the final pose comes from MONSTER_MOVE.
+var relocateOnCastSpells = map[uint32]struct{}{
+	100:   {}, // Charge
+	20252: {}, // Intercept
+	3411:  {}, // Intervene
+	1953:  {}, // Blink
+}
+
+// wireServerRelocateHandling snaps the movement controller when the server
+// relocates the player (Charge is the common case: without this the controller
+// keeps simulating the pre-charge path and rubber-bands the bot home).
+func (b *Bot) wireServerRelocateHandling() {
+	if b == nil || b.world == nil {
+		return
+	}
+	prevReloc := b.world.OnServerRelocate
+	b.world.OnServerRelocate = func(x, y, z, o float32, reason string) {
+		b.log("Server relocate (%s): pos=(%.1f,%.1f,%.1f) — abort local path", reason, x, y, z)
+		b.movementMu.Lock()
+		b.isMoving = false
+		b.lastMoveCommandTime = time.Time{}
+		b.lastMoveCommandPos = [3]float32{}
+		b.ensureMovementControllerLocked()
+		if b.moveController != nil {
+			b.moveController.AbortAndSnap(x, y, z, o)
+		}
+		b.movementMu.Unlock()
+		// Clear sticky pursuit dest so we re-path from the new pose.
+		b.lastPursuitUpdate = time.Time{}
+		b.lastMoveToTargetTime = time.Time{}
+		if prevReloc != nil {
+			prevReloc(x, y, z, o, reason)
+		}
+	}
+
+	prevSpell := b.world.OnSpellCastResult
+	b.world.OnSpellCastResult = func(spellID uint32, success bool, failReason uint8) {
+		if success {
+			if _, ok := relocateOnCastSpells[spellID]; ok {
+				// Drop local path immediately; MONSTER_MOVE will snap pose.
+				b.abortMovementForTeleport()
+				b.logDecision("RELOCATE_SPELL id=%d — abort path pending server pose", spellID)
+			}
+		} else if failReason == 85 { // SPELL_FAILED_NO_POWER
+			b.noteSpellNoPower(spellID)
+			b.logDecision("NO_POWER spell=%d — block re-cast 1.5s", spellID)
+		}
+		if prevSpell != nil {
+			prevSpell(spellID, success, failReason)
+		}
+	}
+}
+
 func (b *Bot) updateMovement() {
 	b.movementMu.Lock()
 	defer b.movementMu.Unlock()
@@ -2851,11 +2921,43 @@ func (b *Bot) IsMoving() bool {
 
 func (b *Bot) CastSpell(spellID uint32, targetGUID uint64) error {
 	b.logDecision("CAST_SPELL id=%d target=%d", spellID, targetGUID)
+	// Do NOT abort the chase path on cast attempt. Charge often CAST_FAILs
+	// (stance/range/path); aborting here froze bots mid-pull so they only
+	// swung NOT_IN_RANGE. Path is dropped on SPELL_GO success (relocate spells)
+	// and on self MONSTER_MOVE (OnServerRelocate).
 	return b.world.CastSpell(spellID, targetGUID)
 }
 
 func (b *Bot) IsSpellReady(spellID uint32) bool {
+	b.noPowerMu.Lock()
+	if b.noPowerUntil != nil {
+		if until, ok := b.noPowerUntil[spellID]; ok {
+			if time.Now().Before(until) {
+				b.noPowerMu.Unlock()
+				return false
+			}
+			delete(b.noPowerUntil, spellID)
+		}
+	}
+	b.noPowerMu.Unlock()
+	if b.world == nil {
+		return false
+	}
 	return b.world.IsSpellReady(spellID)
+}
+
+// noteSpellNoPower blocks a spell in IsSpellReady for a short window after
+// SMSG_CAST_FAILED reason 85 (SPELL_FAILED_NO_POWER).
+func (b *Bot) noteSpellNoPower(spellID uint32) {
+	if spellID == 0 {
+		return
+	}
+	b.noPowerMu.Lock()
+	if b.noPowerUntil == nil {
+		b.noPowerUntil = make(map[uint32]time.Time)
+	}
+	b.noPowerUntil[spellID] = time.Now().Add(1500 * time.Millisecond)
+	b.noPowerMu.Unlock()
 }
 
 func (b *Bot) GetHealth() (current, max uint32) {
@@ -3058,11 +3160,43 @@ func (b *Bot) HasAuraOn(guid uint64, spellID uint32) bool {
 	return obj.HasAura(spellID)
 }
 
+// warriorRageCost is a minimal 3.3.5 base-cost map so CanCast rejects
+// NO_POWER spam when IsSpellReady is still true with 0 rage.
+var warriorRageCost = map[uint32]uint32{
+	6673:  10, // Battle Shout
+	772:   10, // Rend
+	78:    15, // Heroic Strike
+	7386:  15, // Sunder
+	5308:  15, // Execute
+	6343:  20, // Thunder Clap
+	845:   20, // Cleave
+	1680:  25, // Whirlwind
+	12294: 30, // Mortal Strike
+	23881: 20, // Bloodthirst
+	23922: 20, // Shield Slam
+	6572:  5,  // Revenge
+	7384:  5,  // Overpower
+	1715:  10, // Hamstring
+	1160:  10, // Demoralizing Shout
+}
+
 func (b *Bot) CanCast(spellID uint32, targetGUID uint64) bool {
 	if b.world == nil {
 		return true // optimistic for headless tests
 	}
-	return b.world.IsSpellReady(spellID)
+	if !b.world.IsSpellReady(spellID) {
+		return false
+	}
+	// Power precheck for rage users (warrior). Mana/energy classes skip this map.
+	if b.config.Class == 1 { // warrior
+		if need, ok := warriorRageCost[spellID]; ok && need > 0 {
+			cur, _ := b.world.Power()
+			if cur < need {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (b *Bot) GetPetGUID() uint64 {

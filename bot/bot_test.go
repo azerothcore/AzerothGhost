@@ -113,6 +113,8 @@ type aiLogicMock struct {
 	inCombat     bool
 	auras        map[uint64]map[uint32]bool
 	nearby       []luaengine.UnitInfo
+	// If non-nil, only these spell IDs report ready (others false). nil = all ready.
+	spellReady map[uint32]bool
 
 	// Recorded side effects for assertions
 	casts    []string // "spell@target"
@@ -132,7 +134,12 @@ func (m *aiLogicMock) CastSpell(id uint32, t uint64) error {
 	m.casts = append(m.casts, fmt.Sprintf("%d@%d", id, t))
 	return nil
 }
-func (m *aiLogicMock) IsSpellReady(uint32) bool { return true }
+func (m *aiLogicMock) IsSpellReady(id uint32) bool {
+	if m.spellReady == nil {
+		return true
+	}
+	return m.spellReady[id]
+}
 func (m *aiLogicMock) GetHealth() (uint32, uint32) {
 	if m.hpMax == 0 {
 		m.hpMax = 100
@@ -145,9 +152,15 @@ func (m *aiLogicMock) SetLevel(uint32)            {}
 func (m *aiLogicMock) InCombat() bool             { return m.inCombat }
 func (m *aiLogicMock) IsAlive() bool              { return m.alive }
 func (m *aiLogicMock) GetTargetGUID() uint64      { return m.target }
+func (m *aiLogicMock) defaultUnit(g uint64) luaengine.UnitInfo {
+	return luaengine.UnitInfo{
+		GUID: g, Entry: 6, IsAlive: true, Distance: 6, Level: 12,
+		Health: 70, MaxHealth: 100, IsPlayer: false, PosX: 10, PosY: 10, PosZ: 5,
+	}
+}
 func (m *aiLogicMock) GetNearbyUnits(float32) []luaengine.UnitInfo {
 	if len(m.nearby) == 0 {
-		return []luaengine.UnitInfo{{GUID: 555, IsAlive: true, Distance: 6, Level: 12, Health: 70, MaxHealth: 100, IsPlayer: false}}
+		return []luaengine.UnitInfo{m.defaultUnit(555)}
 	}
 	return m.nearby
 }
@@ -157,6 +170,11 @@ func (m *aiLogicMock) GetUnitInfo(g uint64) *luaengine.UnitInfo {
 		if m.nearby[i].GUID == g {
 			return &m.nearby[i]
 		}
+	}
+	// Always resolve current target / default dummy so select_grind does not thrash.
+	if g != 0 && (g == m.target || g == 555) {
+		u := m.defaultUnit(g)
+		return &u
 	}
 	return nil
 }
@@ -183,7 +201,7 @@ func (m *aiLogicMock) HasAuraOn(g uint64, sp uint32) bool {
 	}
 	return m.auras[g][sp]
 }
-func (m *aiLogicMock) CanCast(uint32, uint64) bool { return true }
+func (m *aiLogicMock) CanCast(id uint32, _ uint64) bool { return m.IsSpellReady(id) }
 func (m *aiLogicMock) GetPetGUID() uint64          { return 0 }
 func (m *aiLogicMock) PetAttack(uint64)            {}
 func (m *aiLogicMock) GetStance() int              { return 0 }
