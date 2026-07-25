@@ -363,6 +363,12 @@ func (e *Engine) registerBotFunctions() {
 		return 1
 	})
 
+	// bot.get_own_guid() -> string (full 64-bit safe)
+	e.setFunc("get_own_guid", func(l *lua.State) int {
+		l.PushString(fmt.Sprintf("%d", e.bot.GetOwnGUID()))
+		return 1
+	})
+
 	// bot.get_faction() -> number (faction template id)
 	e.setFunc("get_faction", func(l *lua.State) int {
 		// use own GUID unit info

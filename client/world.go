@@ -2247,6 +2247,13 @@ func (w *WorldClient) TargetGUID() uint64 {
 	return w.targetGUID
 }
 
+// AttackingGUID returns the GUID we last sent CMSG_ATTACKSWING for (0 if not swinging).
+func (w *WorldClient) AttackingGUID() uint64 {
+	w.combatMu.RLock()
+	defer w.combatMu.RUnlock()
+	return w.attackingGUID
+}
+
 // ClearTarget clears the current target selection.
 func (w *WorldClient) ClearTarget() {
 	w.combatMu.Lock()

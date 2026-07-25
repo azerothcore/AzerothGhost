@@ -2688,8 +2688,14 @@ func generateUniqueCharName(seed int) string {
 }
 
 func (b *Bot) AttackTarget(guid uint64) error {
+	// Avoid CMSG_SET_SELECTION spam when already on this target / swinging it.
+	if b.world.TargetGUID() != guid {
+		_ = b.world.SetTarget(guid)
+	}
+	if b.world.AttackingGUID() == guid {
+		return nil
+	}
 	b.logDecision("ATTACK_SWING guid=%d", guid)
-	b.world.SetTarget(guid)
 	return b.world.AttackSwing(guid)
 }
 
@@ -2698,6 +2704,9 @@ func (b *Bot) StopAttack() error {
 }
 
 func (b *Bot) SetTarget(guid uint64) error {
+	if b.world != nil && b.world.TargetGUID() == guid {
+		return nil
+	}
 	return b.world.SetTarget(guid)
 }
 
