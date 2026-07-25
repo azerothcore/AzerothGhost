@@ -1,0 +1,43 @@
+# Binaries
+/azghost
+/azghost-*
+*.exe
+*.test
+*.out
+bin/
+dist/
+
+# Go
+vendor/
+coverage.out
+coverage.html
+
+# Local config & secrets
+.azghost/
+*.local.yml
+*.local.yaml
+.env
+.env.*
+
+# Validation / runtime artifacts
+val-*.jsonl
+validation-runs/
+*.log
+
+# AC data extracts (never commit)
+ac-data/
+mmaps/
+maps/
+vmaps/
+dbc/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+*~
+
+# Docker
+.docker/

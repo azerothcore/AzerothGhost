@@ -1,0 +1,41 @@
+-- scripts/ai/data/priest_spells.lua
+-- Priest spells (disc/holy/shadow) researched.
+
+local M = {}
+
+M.SPELLS = {
+  SMITE = 585,
+  HEAL = 2050,
+  FLASH_HEAL = 2061,
+  RENEW = 139,
+  POWER_WORD_SHIELD = 17,
+  SHADOW_WORD_PAIN = 589,
+  MIND_BLAST = 8092,
+  MIND_FLAY = 15407,
+  PENANCE = 47540,
+  PRAYER_OF_HEALING = 596,
+  -- holy
+  HOLY_NOVA = 15237,
+  CIRCLE_OF_HEALING = 34861,
+  -- disc
+  PAIN_SUPPRESSION = 33206,
+  -- shadow
+  SHADOWFORM = 15473,
+  VAMPIRIC_TOUCH = 34914,
+  DEVOURING_PLAGUE = 2944,
+  -- utility
+  DISPEL_MAGIC = 527,
+  ABOLISH_DISEASE = 552,
+  RESURRECTION = 2006,
+  LEVITATE = 1706,
+  FORTITUDE = 21562,
+}
+
+M.AURAS = {
+  SHADOWFORM = 15473,
+  POWER_WORD_SHIELD = 17,
+  RENEW = 139,
+  SHADOW_WORD_PAIN = 589,
+}
+
+return M

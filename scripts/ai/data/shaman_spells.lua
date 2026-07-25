@@ -1,0 +1,38 @@
+-- scripts/ai/data/shaman_spells.lua
+-- Shaman (resto/ele/enh) researched.
+
+local M = {}
+
+M.SPELLS = {
+  -- ele
+  LIGHTNING_BOLT = 403,
+  CHAIN_LIGHTNING = 421,
+  EARTH_SHOCK = 8042,
+  FLAME_SHOCK = 8050,
+  FROST_SHOCK = 8056,
+  LAVA_BURST = 51505,
+  -- resto
+  HEALING_WAVE = 331,
+  CHAIN_HEAL = 1064,
+  LESSER_HEALING_WAVE = 8004,
+  -- enh
+  STORMSTRIKE = 17364,
+  LAVA_LASH = 60103,
+  -- totems
+  STRENGTH_OF_EARTH_TOTEM = 8071,
+  HEALING_STREAM_TOTEM = 5394,
+  MANA_SPRING_TOTEM = 5675,
+  FIRE_NOVA_TOTEM = 1535,
+  -- utility
+  GHOST_WOLF = 2645,
+  PURGE = 370,
+  WATER_SHIELD = 52127,
+  LIGHTNING_SHIELD = 324,
+}
+
+M.AURAS = {
+  LIGHTNING_SHIELD = 324,
+  WATER_SHIELD = 52127,
+}
+
+return M

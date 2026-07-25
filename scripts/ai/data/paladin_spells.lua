@@ -1,0 +1,48 @@
+-- scripts/ai/data/paladin_spells.lua
+-- Researched spell data for paladin (holy/prot/ret), 3.3.5a + setup.lua + playerbots patterns.
+
+local M = {}
+
+M.SPELLS = {
+  -- generic
+  HOLY_LIGHT = 635,
+  FLASH_OF_LIGHT = 19750,
+  JUDGEMENT = 20271,
+  CONSECRATION = 26573,
+  HAMMER_OF_WRATH = 24275,
+  EXORCISM = 879,
+  TURN_EVIL = 10326,
+  -- ret
+  CRUSADER_STRIKE = 35395,
+  DIVINE_STORM = 53385,
+  SEAL_OF_COMMAND = 20375,
+  -- prot
+  AVENGERS_SHIELD = 31935,
+  SHIELD_OF_RIGHTEOUSNESS = 53600,
+  HAMMER_OF_THE_RIGHTEOUS = 53595,
+  RIGHTEOUS_FURY = 25780,
+  -- holy
+  HOLY_SHOCK = 20473,
+  BEACON_OF_LIGHT = 53563,
+  -- auras/seals/blessings
+  SEAL_OF_RIGHTEOUSNESS = 21084,
+  SEAL_OF_LIGHT = 20165,
+  SEAL_OF_WISDOM = 20166,
+  DEVOTION_AURA = 465,
+  RETRIBUTION_AURA = 7294,
+  CONCENTRATION_AURA = 19746,
+  BLESSING_OF_MIGHT = 19740,
+  BLESSING_OF_KINGS = 20217,
+  BLESSING_OF_WISDOM = 19742,
+  -- prot taunt
+  HAND_OF_RECKONING = 62124,
+}
+
+M.AURAS = {
+  DEVOTION_AURA = 465,
+  RETRIBUTION_AURA = 7294,
+  RIGHTEOUS_FURY = 25780,
+  SEAL_OF_COMMAND = 20375,
+}
+
+return M

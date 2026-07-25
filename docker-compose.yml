@@ -1,0 +1,36 @@
+version: '3.8'
+
+# Worker nodes for distributed load testing.
+# Mount your AzerothCore data extract (mmaps/, maps/, vmaps/) at /data.
+#
+#   export AC_DATA_DIR=/path/to/ac-data
+#   docker compose up --build
+
+services:
+  worker1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "--data-dir=/data", "--listen=:8888"]
+    ports:
+      - "8888:8888"
+    volumes:
+      - ${AC_DATA_DIR:-./ac-data}:/data:ro
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
+
+  worker2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "--data-dir=/data", "--listen=:8888"]
+    ports:
+      - "8889:8888"
+    volumes:
+      - ${AC_DATA_DIR:-./ac-data}:/data:ro
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
