@@ -833,3 +833,57 @@ func TestBloodElfDrasticSnaps(t *testing.T) {
 		t.Logf("BloodElfSnap %s: map=%d pos=(%.1f,%.1f) origZ=%.2f got=%.2f delta=%.2f ok=%v", c.name, mapID, c.x, c.y, c.z, gh, delta, ok)
 	}
 }
+
+func TestDestination_ReturnsPathEnd(t *testing.T) {
+	fs := &fakeSender{}
+	m := NewMovementController(fs, 7, nil, DefaultMovementConfig())
+	path := []navigation.Point3D{
+		{X: 0, Y: 0, Z: 0},
+		{X: 10, Y: 0, Z: 0},
+		{X: 20, Y: 5, Z: 0},
+	}
+	m.SetPath(path, time.Now(), 0, 0)
+	x, y, z, ok := m.Destination()
+	if !ok {
+		t.Fatal("expected destination")
+	}
+	if x != 20 || y != 5 || z != 0 {
+		t.Fatalf("got dest (%.1f,%.1f,%.1f)", x, y, z)
+	}
+}
+
+func TestSetPath_MidMoveDoesNotRestartForSmallHeadingChange(t *testing.T) {
+	fs := &fakeSender{}
+	cfg := DefaultMovementConfig()
+	m := NewMovementController(fs, 7, nil, cfg)
+	start := time.Now()
+	m.SetPath([]navigation.Point3D{
+		{X: 0, Y: 0, Z: 0},
+		{X: 30, Y: 0, Z: 0},
+	}, start, 0, 0)
+	if len(fs.pkts) == 0 || fs.pkts[0].typ != "START" {
+		t.Fatalf("expected START, got %#v", fs.pkts)
+	}
+	// Advance a bit so we are mid-path.
+	m.Update(start.Add(500 * time.Millisecond))
+	before := len(fs.pkts)
+
+	// Near-identical retarget (tiny heading change) should not emit a new START.
+	m.SetPath([]navigation.Point3D{
+		{X: m.curX, Y: m.curY, Z: m.curZ},
+		{X: 30, Y: 0.5, Z: 0},
+	}, start.Add(500*time.Millisecond), m.curO, 0)
+
+	starts := 0
+	for _, p := range fs.pkts[before:] {
+		if p.typ == "START" {
+			starts++
+		}
+	}
+	if starts != 0 {
+		t.Fatalf("expected no new START on mid-path retarget, got %d new packets after %d: %#v", starts, before, fs.pkts[before:])
+	}
+	if !m.IsMoving() {
+		t.Fatal("expected still moving after retarget")
+	}
+}

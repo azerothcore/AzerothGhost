@@ -2274,13 +2274,40 @@ func (b *Bot) moveToPoint(x, y, z float32) {
 		b.world.UpdatePosition(cx, cy, cz, co)
 	}
 
-	if b.isMoving && !b.lastMoveCommandTime.IsZero() && now.Sub(b.lastMoveCommandTime) < 750*time.Millisecond {
-		dx := x - b.lastMoveCommandPos[0]
-		dy := y - b.lastMoveCommandPos[1]
-		dz := z - b.lastMoveCommandPos[2]
-		if dx*dx+dy*dy < 4.0 && math.Abs(float64(dz)) < 3.0 {
+	// Throttle repaths aggressively while already walking.
+	// Lua AI (and some scripts) call bot.move_to every AI tick (~200ms) with a
+	// live target position. Without this, SetPath restarts every tick and
+	// movement looks jerky compared to the native grind/pursue path, which only
+	// repaths about once per second.
+	if b.isMoving && !b.lastMoveCommandTime.IsZero() {
+		since := now.Sub(b.lastMoveCommandTime)
+		ddx := x - b.lastMoveCommandPos[0]
+		ddy := y - b.lastMoveCommandPos[1]
+		ddz := z - b.lastMoveCommandPos[2]
+		destMoved2 := ddx*ddx + ddy*ddy
+
+		// Already heading to nearly the same place: keep the current path.
+		if destMoved2 < 9.0 && math.Abs(float64(ddz)) < 4.0 && since < time.Second {
 			b.movementMu.Unlock()
 			return
+		}
+		// Target only shifted a little (typical mob drift): repath at most ~1.3Hz.
+		if destMoved2 < 36.0 && math.Abs(float64(ddz)) < 6.0 && since < 750*time.Millisecond {
+			b.movementMu.Unlock()
+			return
+		}
+		// Hard floor: never repath more often than 400ms while already moving.
+		if since < 400*time.Millisecond {
+			b.movementMu.Unlock()
+			return
+		}
+		// Path already ends near the requested destination — no need to recompute.
+		if ex, ey, ez, ok := b.moveController.Destination(); ok {
+			edx, edy, edz := ex-x, ey-y, ez-z
+			if edx*edx+edy*edy < 9.0 && math.Abs(float64(edz)) < 4.0 {
+				b.movementMu.Unlock()
+				return
+			}
 		}
 	}
 	b.movementMu.Unlock()
@@ -2523,6 +2550,10 @@ func (b *Bot) GetFacing() float32 {
 }
 
 func (b *Bot) SetFacing(o float32) error {
+	// Preserve forward motion when Lua adjusts facing mid-path.
+	if b.movementActive() {
+		return b.world.SetFacingMoving(o)
+	}
 	return b.world.SetFacing(o)
 }
 
@@ -2535,7 +2566,15 @@ func (b *Bot) FaceTarget(guid uint64) bool {
 	dx := u.PosX - px
 	dy := u.PosY - py
 	fo := float32(math.Atan2(float64(dy), float64(dx)))
-	_ = b.world.SetFacing(fo)
+	// Lua AI faces every tick while chasing. A stationary SET_FACING (no FORWARD
+	// flag) while the controller is still walking makes the server stop
+	// extrapolating forward motion — the classic "choppy Lua movement" symptom.
+	// Use the moving variant whenever a path is active.
+	if b.movementActive() {
+		_ = b.world.SetFacingMoving(fo)
+	} else {
+		_ = b.world.SetFacing(fo)
+	}
 	return true
 }
 

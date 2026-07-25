@@ -171,10 +171,14 @@ func (m *MovementController) SetPath(path []navigation.Point3D, startTime time.T
 	m.clampCurrentZToGround()
 
 	if wasMoving {
+		// Mid-path retarget: keep continuous forward motion. Only emit a
+		// facing correction for a meaningful heading change — micro-adjusts
+		// from frequent Lua move_to repaths make movement look jerky.
+		const repathFacingMinRad = 0.15 // ~8.5 degrees
 		if len(m.path) >= 2 {
 			p1 := m.path[1]
 			targetO := float32(math.Atan2(float64(p1.Y-p0.Y), float64(p1.X-p0.X)))
-			if angleDelta(targetO, m.curO) > 0.08 || angleDelta(targetO, m.lastSentO) > 0.08 {
+			if angleDelta(targetO, m.curO) > repathFacingMinRad || angleDelta(targetO, m.lastSentO) > repathFacingMinRad {
 				m.curO = targetO
 				m.sender.SetFacingMoving(startTime, m.curX, m.curY, m.curZ, m.curO)
 				m.lastHBTime = startTime
@@ -521,6 +525,15 @@ func (m *MovementController) IsMoving() bool { return m.isMoving }
 
 // TravelDist returns how far along the path (2D) we have simulated.
 func (m *MovementController) TravelDist() float32 { return m.travelDist }
+
+// Destination returns the final path waypoint when a path is installed.
+func (m *MovementController) Destination() (x, y, z float32, ok bool) {
+	if len(m.path) == 0 {
+		return 0, 0, 0, false
+	}
+	last := m.path[len(m.path)-1]
+	return last.X, last.Y, last.Z, true
+}
 
 // InitPositionFromWorld seeds the controller's internal position with the current world position
 // right after creation / login. This prevents zeroing out the spawn location before the first path.
