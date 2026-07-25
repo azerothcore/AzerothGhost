@@ -60,6 +60,7 @@ Correlate by approximate time + character name/GUID.
 
 1. **Login stuck** → phase never leaves `loading`; AC kicks in `network.kick`
 2. **Bot frozen after tele** → missing `WORLDPORT_ACK` / `TELEPORT_ACK`
+2b. **Bot keeps old chase after summon** → expect phase `near_teleport`→`in_world`, log `Teleport resume`, Lua `bot.consume_teleport()` clears sticky state
 3. **Swing fails** → `reject` class: `transient` (face/range) vs `terminal` (dead/cant)
 4. **Spell spam fail** → `cast` with `fail_reason`; fix AI preconditions
 5. **No SMSG after CMSG** → silent AC drop; enable AC opcode DEBUG

@@ -386,16 +386,24 @@ func (o *WorldObject) Clone() *WorldObject {
 	}
 	o.valuesMu.RUnlock()
 
+	// Snapshot the *current* estimated pose (not the spline segment start).
+	// AI/Lua chase paths use Pos*; if we copy raw Pos* for a moving unit they
+	// path to the create/MONSTER_MOVE start instead of where the unit is now.
+	ix, iy, iz := o.InterpolatedPosition()
+
 	clone := &WorldObject{
 		GUID:          o.GUID,
 		TypeID:        o.TypeID,
 		Entry:         o.Entry,
 		Values:        vals,
-		PosX:          o.PosX,
-		PosY:          o.PosY,
-		PosZ:          o.PosZ,
+		PosX:          ix,
+		PosY:          iy,
+		PosZ:          iz,
 		Orientation:   o.Orientation,
 		MapID:         o.MapID,
+		LastPosUpdate: o.LastPosUpdate,
+		LastSeen:      o.LastSeen,
+		// Keep spline endpoints so callers can still lead-target if desired.
 		DestX:         o.DestX,
 		DestY:         o.DestY,
 		DestZ:         o.DestZ,
@@ -491,23 +499,51 @@ func (o *WorldObject) IsUnit() bool {
 }
 
 // InterpolatedPosition returns the estimated current position for a moving object.
+// Pure read: does not mutate the object (safe under RLock / concurrent AI ticks).
+// For create-time splines and MONSTER_MOVE, Pos* is the segment start; callers that
+// path to Pos* without interpolating run to a stale "old" location.
 func (o *WorldObject) InterpolatedPosition() (float32, float32, float32) {
+	if o == nil {
+		return 0, 0, 0
+	}
 	if !o.IsMoving || o.MoveDuration <= 0 {
 		return o.PosX, o.PosY, o.PosZ
 	}
 	elapsed := time.Since(o.MoveStartTime)
-	t := float32(elapsed.Seconds()) / float32(o.MoveDuration.Seconds())
-	if t >= 1.0 {
-		o.PosX = o.DestX
-		o.PosY = o.DestY
-		o.PosZ = o.DestZ
-		o.IsMoving = false
-		return o.PosX, o.PosY, o.PosZ
+	if elapsed >= o.MoveDuration {
+		return o.DestX, o.DestY, o.DestZ
 	}
+	if elapsed <= 0 {
+		return o.StartX, o.StartY, o.StartZ
+	}
+	t := float32(elapsed.Seconds()) / float32(o.MoveDuration.Seconds())
 	ix := o.StartX + (o.DestX-o.StartX)*t
 	iy := o.StartY + (o.DestY-o.StartY)*t
 	iz := o.StartZ + (o.DestZ-o.StartZ)*t
 	return ix, iy, iz
+}
+
+// HasKnownPosition reports whether we have ever received a real position for this object.
+// Stubs created by aura packets (etc.) stay at 0,0,0 until a movement/create block arrives.
+func (o *WorldObject) HasKnownPosition() bool {
+	if o == nil {
+		return false
+	}
+	if !o.LastPosUpdate.IsZero() {
+		return true
+	}
+	// Non-zero coords without a timestamp still count (tests / synthetic objects).
+	return o.PosX != 0 || o.PosY != 0 || o.PosZ != 0
+}
+
+// resetMovementInterp clears spline interpolation without touching Pos*/LastPosUpdate.
+// Used on CREATE_OBJECT so a re-create never inherits a previous segment's Dest.
+func (o *WorldObject) resetMovementInterp() {
+	o.IsMoving = false
+	o.MoveDuration = 0
+	o.MoveStartTime = time.Time{}
+	o.DestX, o.DestY, o.DestZ = 0, 0, 0
+	o.StartX, o.StartY, o.StartZ = 0, 0, 0
 }
 
 // DistanceTo computes 3D distance to another position, using interpolated position for moving objects.
@@ -1075,6 +1111,10 @@ func (w *WorldClient) sendPacket(opcode uint16, data []byte) error {
 
 	w.sendMu.Lock()
 	defer w.sendMu.Unlock()
+
+	if w.conn == nil {
+		return fmt.Errorf("not connected")
+	}
 
 	if w.encrypted {
 		w.encryptClient.XORKeyStream(header, header)
@@ -2201,7 +2241,15 @@ func (w *WorldClient) GetNearbyUnits(maxDist float32) []*WorldObject {
 	w.objectsMu.RLock()
 	var raw []*WorldObject
 	for _, obj := range w.objects {
-		if obj.TypeID == ObjectTypeUnit && obj.DistanceTo(w.posX, w.posY, w.posZ) <= maxDist {
+		if obj.TypeID != ObjectTypeUnit {
+			continue
+		}
+		// Skip aura/combat stubs and creates that have not delivered a position yet.
+		// Chasing (0,0,0) or a never-updated spawn is a common "run to empty ground" bug.
+		if !obj.HasKnownPosition() {
+			continue
+		}
+		if obj.DistanceTo(w.posX, w.posY, w.posZ) <= maxDist {
 			raw = append(raw, obj)
 		}
 	}
@@ -3066,11 +3114,53 @@ func (w *WorldClient) handleUpdateObject(data []byte) {
 				w.skipValuesUpdate(r)
 			} else {
 				obj := w.getOrCreateObject(guid)
+				// Preserve a fresher MONSTER_MOVE pose if create is delayed in the stream
+				// (move/aura stubs often exist before CREATE_OBJECT is parsed).
+				preX, preY, preZ := obj.PosX, obj.PosY, obj.PosZ
+				preLast := obj.LastPosUpdate
+				hadPrePos := obj.HasKnownPosition()
+				preMoving := obj.IsMoving
+				preDestX, preDestY, preDestZ := obj.DestX, obj.DestY, obj.DestZ
+				preStartX, preStartY, preStartZ := obj.StartX, obj.StartY, obj.StartZ
+				preMoveStart, preMoveDur := obj.MoveStartTime, obj.MoveDuration
+
 				obj.TypeID = objTypeID
 				obj.IsPlayer = objTypeID == ObjectTypePlayer
+				// Drop prior spline so GUID reuse never keeps an old Dest.
+				obj.resetMovementInterp()
 
 				w.readMovementUpdate(r, obj)
 				w.readValuesUpdate(r, guid)
+
+				if hadPrePos {
+					if !obj.HasKnownPosition() {
+						// Create had no usable position block — keep pre-create pose.
+						obj.PosX, obj.PosY, obj.PosZ = preX, preY, preZ
+						obj.LastPosUpdate = preLast
+						if preMoving {
+							obj.IsMoving = true
+							obj.DestX, obj.DestY, obj.DestZ = preDestX, preDestY, preDestZ
+							obj.StartX, obj.StartY, obj.StartZ = preStartX, preStartY, preStartZ
+							obj.MoveStartTime, obj.MoveDuration = preMoveStart, preMoveDur
+						}
+					} else if !obj.IsMoving && !preLast.IsZero() && time.Since(preLast) < 2*time.Second {
+						// Stationary delayed CREATE often carries an older spawn/home pose
+						// while MONSTER_MOVE already put the unit on a live path.
+						ddx := obj.PosX - preX
+						ddy := obj.PosY - preY
+						ddz := obj.PosZ - preZ
+						if ddx*ddx+ddy*ddy+ddz*ddz > 16 { // >4 yards
+							obj.PosX, obj.PosY, obj.PosZ = preX, preY, preZ
+							obj.LastPosUpdate = preLast
+							if preMoving {
+								obj.IsMoving = true
+								obj.DestX, obj.DestY, obj.DestZ = preDestX, preDestY, preDestZ
+								obj.StartX, obj.StartY, obj.StartZ = preStartX, preStartY, preStartZ
+								obj.MoveStartTime, obj.MoveDuration = preMoveStart, preMoveDur
+							}
+						}
+					}
+				}
 			}
 
 		case UpdateTypeOutOfRangeObjects:
@@ -3585,11 +3675,12 @@ func (w *WorldClient) handleMonsterMove(data []byte) {
 	binary.Read(r, binary.LittleEndian, &posY)
 	binary.Read(r, binary.LittleEndian, &posZ)
 
-	w.objectsMu.RLock()
-	obj, ok := w.objects[guid]
-	w.objectsMu.RUnlock()
-	if !ok || obj == nil {
-		return
+	// Accept MONSTER_MOVE before CREATE_OBJECT so delayed creates do not leave us
+	// stuck with a later create's older spawn/start pose only.
+	obj := w.getOrCreateObject(guid)
+	if obj.TypeID == 0 {
+		// Likely a unit; refined when CREATE arrives.
+		obj.TypeID = ObjectTypeUnit
 	}
 
 	// Always update to the current position from the packet
@@ -3613,6 +3704,7 @@ func (w *WorldClient) handleMonsterMove(data []byte) {
 
 	if moveType == 1 { // MonsterMoveStop
 		obj.IsMoving = false
+		obj.MoveDuration = 0
 		// snap to the stop pos
 		obj.StartX = posX
 		obj.StartY = posY

@@ -191,6 +191,7 @@ func (m *aiLogicMock) GetPowerType() uint8         { return 1 }
 func (m *aiLogicMock) IsBehindTarget(targetGUID uint64) bool { return true }
 
 func (m *aiLogicMock) ValidationMode() bool { return false }
+func (m *aiLogicMock) ConsumeTeleport() bool { return false }
 
 func (m *aiLogicMock) GetFacing() float32 { return 0 }
 func (m *aiLogicMock) SetFacing(float32) error { return nil }

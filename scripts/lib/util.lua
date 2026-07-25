@@ -72,4 +72,12 @@ function M.angle_delta(a, b)
   return math.abs(d)
 end
 
+-- True once after a completed summon/teleport (see bot.consume_teleport).
+function M.consume_teleport()
+  if bot and bot.consume_teleport then
+    return bot.consume_teleport()
+  end
+  return false
+end
+
 return M

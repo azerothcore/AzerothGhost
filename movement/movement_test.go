@@ -887,3 +887,50 @@ func TestSetPath_MidMoveDoesNotRestartForSmallHeadingChange(t *testing.T) {
 		t.Fatal("expected still moving after retarget")
 	}
 }
+
+func TestAbortAndSnap_ClearsPathWithoutPackets(t *testing.T) {
+	sender := &fakeSender{}
+	cfg := DefaultMovementConfig()
+	m := NewMovementController(sender, 7.0, nil, cfg)
+	m.InitPositionFromWorld(10, 20, 30, 1.5)
+
+	path := []navigation.Point3D{
+		{X: 10, Y: 20, Z: 30},
+		{X: 40, Y: 20, Z: 30},
+	}
+	now := time.Now()
+	m.SetPath(path, now, 1.5, 0)
+	if !m.IsMoving() {
+		t.Fatal("expected moving after SetPath")
+	}
+	// Advance so travelDist > 0
+	m.Update(now.Add(200 * time.Millisecond))
+
+	// Summon/teleport: silent abort + snap to new coords
+	m.AbortAndSnap(100, 200, 50, 0.25)
+	if m.IsMoving() {
+		t.Fatal("expected not moving after AbortAndSnap")
+	}
+	if m.TravelDist() != 0 {
+		t.Fatalf("travelDist=%v want 0", m.TravelDist())
+	}
+	x, y, z, o := m.CurrentPosition()
+	if x != 100 || y != 200 || z != 50 || o != 0.25 {
+		t.Fatalf("pose=(%v,%v,%v,%v) want (100,200,50,0.25)", x, y, z, o)
+	}
+	// No STOP packet at the old pre-teleport location (AbortSilent must not MoveStop).
+	for _, p := range sender.pkts {
+		if p.typ == "STOP" {
+			t.Fatalf("unexpected STOP packet after AbortAndSnap: %+v", p)
+		}
+	}
+	// Further Update must not resurrect old path motion
+	m.Update(now.Add(time.Second))
+	if m.IsMoving() {
+		t.Fatal("Update re-started motion after AbortAndSnap")
+	}
+	x2, y2, z2, _ := m.CurrentPosition()
+	if x2 != 100 || y2 != 200 || z2 != 50 {
+		t.Fatalf("pose drifted after Update: (%v,%v,%v)", x2, y2, z2)
+	}
+}

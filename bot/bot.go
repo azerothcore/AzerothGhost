@@ -155,6 +155,12 @@ type Bot struct {
 	validationEnc  *json.Encoder
 	validationMu   sync.Mutex
 	validationSeq  uint64
+
+	// Teleport / summon resume: set when near/far transfer returns to in_world.
+	// Lua scripts poll via ConsumeTeleport() so AI can fully restart at the new pose.
+	teleportMu      sync.Mutex
+	teleportPending bool
+	teleportReason  string
 }
 
 // myPos returns current player position (convenience to avoid direct field access on client).
@@ -229,6 +235,7 @@ func NewHeadlessBot(wc *client.WorldClient, cfg Config) *Bot {
 	b.ensureMovementController()
 	b.initNavigation()
 	b.wireValidationInstrumentation()
+	b.wireTeleportHandling()
 
 	// Lua engine + AIBundle/LuaCode loading (same rules as full Run path)
 	b.lua = luaengine.NewEngine(b)
@@ -432,6 +439,8 @@ func (b *Bot) Run() BotResult {
 
 	// Structured validation timeline + optional packet trace (no-op when disabled).
 	b.wireValidationInstrumentation()
+	// Summon / .go / portal: interrupt movement+combat and flag Lua to restart AI.
+	b.wireTeleportHandling()
 
 	// Start world client
 	worldErrCh := make(chan error, 1)
@@ -2547,6 +2556,116 @@ func (b *Bot) stopCurrentMove() {
 	}
 }
 
+// wireTeleportHandling installs a session-phase hook that reacts to near teleports
+// (summon, MSG_MOVE_TELEPORT) and far transfers (SMSG_NEW_WORLD).
+// Must run after wireValidationInstrumentation so both callbacks chain correctly.
+func (b *Bot) wireTeleportHandling() {
+	if b == nil || b.world == nil {
+		return
+	}
+	prev := b.world.OnSessionPhase
+	b.world.OnSessionPhase = func(c client.SessionPhaseChange) {
+		if prev != nil {
+			prev(c)
+		}
+		// Transfer in flight: drop local path immediately so the movement loop
+		// cannot keep extrapolating from the pre-teleport pose.
+		if c.To == client.PhaseNearTeleport || c.To == client.PhaseFarTransfer {
+			b.abortMovementForTeleport()
+			return
+		}
+		// Transfer complete: snap to new pose, clear combat, flag Lua restart.
+		if c.To == client.PhaseInWorld &&
+			(c.From == client.PhaseNearTeleport || c.From == client.PhaseFarTransfer) {
+			b.handleTeleportResume(c.Reason)
+		}
+	}
+}
+
+// abortMovementForTeleport silently cancels any active path (no MoveStop at old coords).
+func (b *Bot) abortMovementForTeleport() {
+	b.movementMu.Lock()
+	defer b.movementMu.Unlock()
+	b.isMoving = false
+	b.lastMoveCommandTime = time.Time{}
+	if b.moveController != nil {
+		b.moveController.AbortSilent()
+	}
+}
+
+// handleTeleportResume runs when the session returns to in_world after a summon/teleport.
+// Interrupts combat + movement, snaps the movement controller, and flags Lua AI to restart.
+func (b *Bot) handleTeleportResume(reason string) {
+	if b.world == nil {
+		return
+	}
+	x, y, z, o, mapID := b.world.Position()
+	b.log("Teleport resume (%s): map=%d pos=(%.1f,%.1f,%.1f) — interrupt everything, restart AI",
+		reason, mapID, x, y, z)
+
+	// Local combat interrupt first (always). Best-effort CMSG when socket is live.
+	b.world.ClearTarget()
+	b.world.ClearCombat()
+	_ = b.world.AttackStop()
+	_ = b.world.SetTarget(0)
+
+	b.movementMu.Lock()
+	b.isMoving = false
+	b.lastMoveCommandTime = time.Time{}
+	b.lastMoveCommandPos = [3]float32{}
+	b.ensureMovementControllerLocked()
+	if b.moveController != nil {
+		b.moveController.AbortAndSnap(x, y, z, o)
+	}
+	b.movementMu.Unlock()
+
+	// Drop Go-side pursuit / loot sticky state so built-in AI cannot chase old coords.
+	b.grindTargetGUID = 0
+	b.lastPursuedTargetGUID = 0
+	b.lastPursuedTargetPos = [3]float32{}
+	b.lastPursuedTargetTime = time.Time{}
+	b.lastPursuitUpdate = time.Time{}
+	b.lastMoveToTargetPos = [3]float32{}
+	b.lastMoveToTargetTime = time.Time{}
+	b.lastAttackSwingAt = time.Time{}
+	b.currentTargetSetAt = time.Time{}
+	b.lastEngagedGUID = 0
+	b.engagedTargetHealth = 0
+	b.lastLootGUID = 0
+	b.lastLootAttemptGUID = 0
+	b.lastLootAttemptAt = time.Time{}
+
+	b.teleportMu.Lock()
+	b.teleportPending = true
+	b.teleportReason = reason
+	b.teleportMu.Unlock()
+
+	if b.validationEnc != nil {
+		b.logValidation("teleport", map[string]interface{}{
+			"reason": reason,
+			"map":    mapID,
+			"x":      x,
+			"y":      y,
+			"z":      z,
+		})
+	}
+	// Do not call into Lua here (world read loop). Scripts poll bot.consume_teleport()
+	// on the next AI tick and fully restart sticky state from the new pose.
+}
+
+// ConsumeTeleport returns true once after a completed summon/teleport so Lua can
+// clear sticky state and re-settle at the new position.
+func (b *Bot) ConsumeTeleport() bool {
+	b.teleportMu.Lock()
+	defer b.teleportMu.Unlock()
+	if !b.teleportPending {
+		return false
+	}
+	b.teleportPending = false
+	b.teleportReason = ""
+	return true
+}
+
 func (b *Bot) updateMovement() {
 	b.movementMu.Lock()
 	defer b.movementMu.Unlock()
@@ -2851,6 +2970,12 @@ func (b *Bot) GetUnitInfo(guid uint64) *luaengine.UnitInfo {
 }
 
 func (b *Bot) worldObjToUnitInfo(obj *client.WorldObject) luaengine.UnitInfo {
+	// Always expose the *current* estimated pose. Raw Pos* is the create/MONSTER_MOVE
+	// segment start; chasing it is the classic "run to where the mob used to be" bug.
+	px, py, pz := obj.InterpolatedPosition()
+	mx, my, mz := b.myPos()
+	dx, dy, dz := px-mx, py-my, pz-mz
+	dist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
 	dyn := obj.Value(client.UnitDynamicFlags)
 	return luaengine.UnitInfo{
 		GUID:      obj.GUID,
@@ -2858,12 +2983,12 @@ func (b *Bot) worldObjToUnitInfo(obj *client.WorldObject) luaengine.UnitInfo {
 		Health:    obj.Health(),
 		MaxHealth: obj.MaxHealth(),
 		Level:     obj.Level(),
-		PosX:      obj.PosX,
-		PosY:      obj.PosY,
-		PosZ:      obj.PosZ,
+		PosX:      px,
+		PosY:      py,
+		PosZ:      pz,
 		IsAlive:   obj.IsAlive(),
 		IsPlayer:  obj.IsPlayer,
-		Distance:  obj.DistanceTo(b.myPos()),
+		Distance:  dist,
 		Name:      obj.Name,
 		Faction:   obj.Value(client.UnitFieldFaction),
 		NPCFlags:  obj.Value(client.UnitNPCFlags),

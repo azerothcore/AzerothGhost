@@ -75,6 +75,11 @@ type BotAPI interface {
 	// instrumentation enabled. Must be cheap to call every tick when false.
 	// See AZEROTHGHOST_E2E_QUALITY_ASSURANCE_PLAN.md (Performance Isolation section).
 	ValidationMode() bool
+
+	// ConsumeTeleport returns true once after a completed near/far teleport
+	// (summon, MSG_MOVE_TELEPORT, SMSG_NEW_WORLD). Scripts should interrupt sticky
+	// chase/combat state and restart from the new position.
+	ConsumeTeleport() bool
 }
 
 // UnitInfo is a simplified view of a nearby unit passed to Lua.
@@ -466,6 +471,14 @@ func (e *Engine) registerBotFunctions() {
 		return 1
 	})
 
+	// bot.consume_teleport() -> bool
+	// True once after summon / near teleport / worldport completes. Clear sticky
+	// AI state and resume from bot.get_position().
+	e.setFunc("consume_teleport", func(l *lua.State) int {
+		l.PushBoolean(e.bot.ConsumeTeleport())
+		return 1
+	})
+
 	L.SetGlobal("bot")
 }
 
@@ -594,6 +607,20 @@ func (e *Engine) CallFunction(name string) error {
 	if !e.state.IsFunction(-1) {
 		e.state.Pop(1)
 		return fmt.Errorf("lua function %q not found", name)
+	}
+	return e.state.ProtectedCall(0, 0, 0)
+}
+
+// CallFunctionIfExists calls a named global Lua function if present.
+// Missing functions are a no-op (used for optional hooks like on_teleport).
+func (e *Engine) CallFunctionIfExists(name string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.state.Global(name)
+	if !e.state.IsFunction(-1) {
+		e.state.Pop(1)
+		return nil
 	}
 	return e.state.ProtectedCall(0, 0, 0)
 }

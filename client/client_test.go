@@ -151,3 +151,59 @@ func TestConnectAndAuthDialFailure(t *testing.T) {
 		t.Error("AuthClient.Authenticate to invalid should fail")
 	}
 }
+
+func TestInterpolatedPosition_DoesNotMutateAndAdvances(t *testing.T) {
+	obj := &WorldObject{
+		PosX: 0, PosY: 0, PosZ: 0,
+		StartX: 0, StartY: 0, StartZ: 0,
+		DestX: 100, DestY: 0, DestZ: 0,
+		IsMoving: true,
+		MoveStartTime: time.Now().Add(-500 * time.Millisecond),
+		MoveDuration:  time.Second,
+	}
+	x, y, z := obj.InterpolatedPosition()
+	if x < 40 || x > 60 {
+		t.Fatalf("mid-spline x=%v want ~50", x)
+	}
+	if y != 0 || z != 0 {
+		t.Fatalf("y/z = %v,%v", y, z)
+	}
+	// Pure read: raw Pos* stays at segment start
+	if obj.PosX != 0 || !obj.IsMoving {
+		t.Fatalf("InterpolatedPosition mutated object: PosX=%v IsMoving=%v", obj.PosX, obj.IsMoving)
+	}
+
+	obj.MoveStartTime = time.Now().Add(-2 * time.Second)
+	x, _, _ = obj.InterpolatedPosition()
+	if x != 100 {
+		t.Fatalf("completed spline x=%v want Dest 100", x)
+	}
+}
+
+func TestClone_UsesInterpolatedPose(t *testing.T) {
+	obj := &WorldObject{
+		GUID: 1, TypeID: ObjectTypeUnit, Values: map[uint16]uint32{},
+		PosX: 0, PosY: 0, PosZ: 0,
+		StartX: 0, StartY: 0, StartZ: 0,
+		DestX: 100, DestY: 0, DestZ: 0,
+		IsMoving: true,
+		MoveStartTime: time.Now().Add(-500 * time.Millisecond),
+		MoveDuration:  time.Second,
+		LastPosUpdate: time.Now(),
+	}
+	cl := obj.Clone()
+	if cl.PosX < 40 || cl.PosX > 60 {
+		t.Fatalf("clone PosX=%v should be mid-path, not create start 0", cl.PosX)
+	}
+}
+
+func TestHasKnownPosition(t *testing.T) {
+	stub := &WorldObject{}
+	if stub.HasKnownPosition() {
+		t.Fatal("zero stub should not have known position")
+	}
+	stub.LastPosUpdate = time.Now()
+	if !stub.HasKnownPosition() {
+		t.Fatal("LastPosUpdate should mark known")
+	}
+}

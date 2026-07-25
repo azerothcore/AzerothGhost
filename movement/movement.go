@@ -544,6 +544,35 @@ func (m *MovementController) InitPositionFromWorld(x, y, z, o float32) {
 	m.curO = o
 }
 
+// AbortSilent cancels any active path without emitting MoveStop.
+// Used when the server already relocated the player (teleport/summon): stopping
+// at the pre-teleport pose would fight the server position.
+func (m *MovementController) AbortSilent() {
+	m.path = nil
+	m.segLens = nil
+	m.cumLens = nil
+	m.totalDist = 0
+	m.travelDist = 0
+	m.isMoving = false
+	m.turnPhase = 0
+	m.turnFacingsSent = 0
+	m.nextSegIdx = 0
+	m.firstMoveSent = false
+	m.firstHBWithJumpSent = false
+	m.hasJumpInfo = false
+	m.haveLastSent = false
+	m.lastHBTime = time.Time{}
+	m.lastFacingTime = time.Time{}
+	m.startTime = time.Time{}
+}
+
+// AbortAndSnap aborts any path (no MoveStop) and snaps the controller pose to the
+// post-teleport world position so later Update() cannot overwrite the new coords.
+func (m *MovementController) AbortAndSnap(x, y, z, o float32) {
+	m.AbortSilent()
+	m.curX, m.curY, m.curZ, m.curO = x, y, z, o
+}
+
 func (m *MovementController) clampCurrentZToGround() {
 	if m.nav == nil {
 		return

@@ -48,7 +48,27 @@ function M.new(opts)
     self.engaged = false
     self.caster:reset_pull()
     self.chase:reset()
+    if self.wander and self.wander.reset then
+      self.wander:reset()
+    end
     targeting.clear_target()
+  end
+
+  -- Summon / teleport: Go already stopped movement+attack; drop sticky Lua state
+  -- and re-settle so the next engage uses the post-teleport position.
+  function self:on_teleported()
+    logf("grind: teleport/summon interrupt — clear state, restart at new position")
+    self:clear()
+    if targeting.clear_blacklist then
+      targeting.clear_blacklist()
+    end
+    if bot.stop_moving then
+      pcall(function()
+        bot.stop_moving()
+      end)
+    end
+    -- Brief settle so object cache repopulates around the new pose.
+    self.boot_at = util.now()
   end
 
   function self:finish_corpse(guid, u)
@@ -149,6 +169,12 @@ function M.new(opts)
   end
 
   function self:tick()
+    -- Must run before settle/target logic so a mid-chase summon cannot keep the old mob.
+    if bot.consume_teleport and bot.consume_teleport() then
+      self:on_teleported()
+      return
+    end
+
     if not bot.is_alive or not bot.is_alive() then
       if bot.send_command then
         bot.send_command(".revive")
