@@ -3667,12 +3667,21 @@ func (w *WorldClient) isSelfGUID(guid uint64) bool {
 // applySelfServerRelocate updates local player pose and notifies the bot so the
 // movement controller cannot keep heartbeating pre-relocate coordinates (Charge
 // would otherwise "rubber-band" back to the cast position).
+// Pose writes go through moveMu (same path as UpdatePosition). After the
+// OnServerRelocate callback aborts the controller we re-assert pose so a
+// concurrent updateMovement cannot leave pre-relocate coords published.
 func (w *WorldClient) applySelfServerRelocate(x, y, z float32, reason string) {
-	_, _, _, o, _ := w.Position()
-	w.posX, w.posY, w.posZ = x, y, z
-	if w.OnServerRelocate != nil {
-		w.OnServerRelocate(x, y, z, o, reason)
+	w.moveMu.Lock()
+	o := w.orientation
+	w.setPositionLocked(x, y, z, o)
+	cb := w.OnServerRelocate
+	w.moveMu.Unlock()
+	if cb != nil {
+		cb(x, y, z, o, reason)
 	}
+	w.moveMu.Lock()
+	w.setPositionLocked(x, y, z, o)
+	w.moveMu.Unlock()
 }
 
 func (w *WorldClient) handleMonsterMove(data []byte) {

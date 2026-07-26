@@ -270,13 +270,6 @@ function M.register(ctx)
     return now < until_t
   end
 
-  local function mark_nopower(ctx2, spell_id, secs)
-    if ctx2 and ctx2.set_blackboard then
-      local now = (bot.now_ms and bot.now_ms() / 1000) or os.time()
-      ctx2:set_blackboard("nopower_" .. tostring(spell_id), now + (secs or 1.5))
-    end
-  end
-
   local function melee_target(max_dist)
     max_dist = max_dist or 5
     local t = bot.get_target() or 0
@@ -303,10 +296,9 @@ function M.register(ctx)
     local r = rage_now()
     utils.log_decision(string.format("%s (rage=%.0f need=%d)", label, r, RAGE_COST[spell_id] or 0))
     bot.cast_spell(spell_id, target or 0)
-    -- Optimistic: if we were tight on rage, avoid immediate re-cast spam.
-    if r < (RAGE_COST[spell_id] or 0) + 5 then
-      mark_nopower(ctx2, spell_id, 1.2)
-    end
+    -- Do not optimistically mark_nopower here: a range/facing/LOS fail would
+    -- mis-block retries. Confirmed NO_POWER is handled server-side
+    -- (noteSpellNoPower → is_spell_ready / can_cast).
     return true
   end
 

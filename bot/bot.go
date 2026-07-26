@@ -3184,7 +3184,9 @@ func (b *Bot) CanCast(spellID uint32, targetGUID uint64) bool {
 	if b.world == nil {
 		return true // optimistic for headless tests
 	}
-	if !b.world.IsSpellReady(spellID) {
+	// Use Bot.IsSpellReady so noPowerUntil (CAST_FAILED NO_POWER) is honored
+	// for callers that only check can_cast without a prior is_spell_ready.
+	if !b.IsSpellReady(spellID) {
 		return false
 	}
 	// Power precheck for rage users (warrior). Mana/energy classes skip this map.

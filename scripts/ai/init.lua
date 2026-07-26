@@ -280,12 +280,9 @@ local function create_ai_engine()
       return false
     end
     local in_combat = ctx:get_value("in_combat")
-    -- In combat: do not consume the tick (would starve rotation/melee). Only
-    -- stop pathing so we don't pull extras while critical.
+    -- In combat: do not consume the tick (would starve rotation/melee) and do
+    -- not stop_moving — that thrash-repaths with engage_melee every ~200ms.
     if in_combat then
-      if bot.is_moving and bot.is_moving() and bot.stop_moving then
-        bot.stop_moving()
-      end
       return false
     end
     -- Out of combat + critical HP: force rest window, drop target, no new pulls.
@@ -376,7 +373,9 @@ local function create_ai_engine()
     if bot.set_sheath then pcall(function() bot.set_sheath(0) end) end
     -- Always path toward the unit first; engage_melee will swing when close.
     -- Never open with ATTACKSWING at range (causes "stare" + NOT_IN_RANGE spam).
-    if best.x ~= nil and best.y ~= nil and bot.move_to then
+    if grind_chase then
+      grind_chase:to_unit(best)
+    elseif best.x ~= nil and best.y ~= nil and bot.move_to then
       bot.move_to(tonumber(best.x) or 0, tonumber(best.y) or 0, tonumber(best.z) or 0)
     end
     if bot.face_target then pcall(function() bot.face_target(best.guid) end) end
@@ -404,7 +403,7 @@ local function create_ai_engine()
     return false
   end)
 
-  -- melee basics (sticky chase via scripts/lib/movement when available)
+  -- melee basics (sticky chase via grind_chase when available)
   ai:register_action("engage_melee", function(ctx)
     local tg = bot.get_target and bot.get_target() or 0
     if tg == 0 or tg == "0" then return false end
@@ -434,12 +433,15 @@ local function create_ai_engine()
     end
 
     if d > 3.2 then
-      if bot.move_to and u.x ~= nil and u.y ~= nil then
+      if grind_chase then
+        grind_chase:to_unit(u)
+      elseif bot.move_to and u.x ~= nil and u.y ~= nil then
         bot.move_to(tonumber(u.x) or 0, tonumber(u.y) or 0, tonumber(u.z) or 0)
       end
       return true
     end
     if bot.face_target then pcall(function() bot.face_target(tg) end) end
+    if grind_chase then grind_chase:reset() end
     if movement_lib and movement_lib.stop_if_moving then
       movement_lib.stop_if_moving()
     elseif bot.stop_moving then
@@ -567,33 +569,45 @@ local function create_ai_engine()
   end)
 
   -- rest: OOC heal-up between pulls (beats grind select when HP/power low).
-  -- Yields to lootable corpses so we do not skip loot while recovering.
+  -- Yields to lootable corpses so we do not skip loot while recovering, but
+  -- still arms rest_until so select_grind_target (relevance 25–30) cannot
+  -- steal the tick from loot_nearby (15–20) while HP/power is low.
   ai:register_action("rest_if_low", function(ctx)
     if ctx:get_value("in_combat") then
       if ctx.set_blackboard then ctx:set_blackboard("rest_until", nil) end
       return false
     end
-    -- Prefer looting first (loot_nearby relevance is lower; return false to let it run).
-    if bot.get_nearby_units then
-      for _, u in ipairs(bot.get_nearby_units(12) or {}) do
-        if not u.is_player and (u.lootable or u.is_alive == false) and (u.distance or 99) < 10 then
-          return false
-        end
-      end
-    end
     local now = (bot.now_ms and (bot.now_ms() / 1000)) or os.time()
-    local rest_until = ctx.get_blackboard and ctx:get_blackboard("rest_until")
-    if rest_until and now < rest_until then
-      if bot.stop_moving then bot.stop_moving() end
-      return true
-    end
     local hp = ctx:get_value("health_pct") or 100
     local pp = ctx:get_value("power_pct") or 100
     -- Rage/runic/energy recover in combat; only mana casters rest on low power.
     local power_type = bot.get_power_type and bot.get_power_type() or 0
     local low_power = (power_type == 0) and pp < 25 -- 0 = mana
+    local needs_rest = (hp < 40) or low_power
+
+    local function arm_rest_until()
+      if not needs_rest then return end
+      local secs = (hp < 25) and 10 or 6
+      if ctx.set_blackboard then ctx:set_blackboard("rest_until", now + secs) end
+    end
+
+    -- Prefer looting first: return false so loot_nearby can run, but arm the
+    -- rest window first so grind cannot pull while we recover.
+    if bot.get_nearby_units then
+      for _, u in ipairs(bot.get_nearby_units(12) or {}) do
+        if not u.is_player and (u.lootable or u.is_alive == false) and (u.distance or 99) < 10 then
+          arm_rest_until()
+          return false
+        end
+      end
+    end
+    local rest_until = ctx.get_blackboard and ctx:get_blackboard("rest_until")
+    if rest_until and now < rest_until then
+      if bot.stop_moving then bot.stop_moving() end
+      return true
+    end
     -- Resume grinding once mostly healthy (don't stick in rest at 50% forever).
-    if hp < 40 or low_power then
+    if needs_rest then
       local secs = (hp < 25) and 10 or 6
       if ctx.set_blackboard then ctx:set_blackboard("rest_until", now + secs) end
       utils.log_decision(
