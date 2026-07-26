@@ -71,7 +71,7 @@ function M.Engine:Tick()
   if not bot then return end
 
   -- Summon / near-teleport / worldport: Go already interrupted movement+attack.
-  -- Drop sticky target state so strategies re-acquire at the new position.
+  -- Drop sticky target/rest state so strategies re-acquire at the new position.
   if bot.consume_teleport and bot.consume_teleport() then
     if bot.stop_moving then pcall(bot.stop_moving) end
     if bot.stop_attack then pcall(bot.stop_attack) end
@@ -79,11 +79,19 @@ function M.Engine:Tick()
     if self.set_blackboard then
       self:set_blackboard("teleported", true)
       self:set_blackboard("current_target", nil)
+      self:set_blackboard("rest_until", nil)
     end
     return
   end
 
   values.update_cache(self._tick, self)
+
+  -- Expose power on ctx for strategies that only check is_spell_ready.
+  -- (Cached each tick; cheap.)
+  if bot.get_power then
+    local cur = bot.get_power()
+    self._power = tonumber(cur) or 0
+  end
 
   local candidates = {}
 

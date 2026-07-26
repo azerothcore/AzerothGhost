@@ -38,9 +38,16 @@ function M.new_caster(opts)
     if bot.is_spell_ready and not bot.is_spell_ready(spell_id) then
       return false
     end
-    local need = self.costs[spell_id] or extra.rage or 0
-    if util.rage() < need then
+    -- Power first: is_spell_ready is true with 0 rage/mana and yields CAST_FAILED 85.
+    local need = self.costs[spell_id] or extra.rage or extra.cost or 0
+    local have = util.rage() -- name is historical; returns current power for any type
+    if type(have) == "number" and have < need then
       return false
+    end
+    if bot.can_cast and target_guid and not util.is_zero_guid(target_guid) then
+      if not bot.can_cast(spell_id, target_guid) then
+        return false
+      end
     end
     local t = util.now()
     if not extra.ignore_gcd and (t - self.last_cast_at) < self.gcd then

@@ -18,8 +18,9 @@ function RestStrategy:getType()
 end
 
 function RestStrategy:getDefaultActions()
+  -- Above grind select (25) so low-HP OOC pauses win over new pulls.
   return {
-    {name = "rest_if_low", relevance = 6},
+    {name = "rest_if_low", relevance = 32},
   }
 end
 

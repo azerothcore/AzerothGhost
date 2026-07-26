@@ -33,76 +33,99 @@ local values = dofile("scripts/ai/core/values.lua") -- for enemy/ally finders
 
 local M = {}
 
+-- Spec strategy names that must not all run at once (only one primary per class).
+local CLASS_SPEC_NAMES = {
+  "arms", "fury", "prot",
+  "retribution", "protection", "holy",
+  "beast_mastery", "marksmanship", "survival",
+  "assassination", "combat", "subtlety",
+  "shadow", "holy_priest", "discipline",
+  "blood", "frost_dk", "unholy",
+  "elemental", "enhancement", "resto_shaman",
+  "fire", "frost", "arcane",
+  "destruction", "affliction", "demonology",
+  "balance", "feral", "resto_druid",
+}
+
+-- Forward declare: detect_spec is defined below enable_class_defaults.
+local detect_spec
+
+-- Class generic + single primary spec only. Enabling every spec at once made
+-- the bot try shield slam / bloodthirst / mortal strike every tick and starve
+-- the real rotation (this is why the "advanced" grind felt broken).
 local function enable_class_defaults(ai, cls)
   cls = cls or (bot and bot.get_class and bot.get_class()) or 0
-  -- registered-based (for enable_default after wiring)
-  if ai.registered_strategies["generic_warrior"] then
-    ai:enable("generic_warrior"); ai:enable("arms"); ai:enable("fury"); ai:enable("prot")
-  end
-  if ai.registered_strategies["hunter_generic"] then
-    ai:enable("hunter_generic"); ai:enable("beast_mastery"); ai:enable("pet_management")
-  end
-  if ai.registered_strategies["mage_generic"] then
-    ai:enable("mage_generic"); ai:enable("fire")
-  end
-  -- remaining classes (enable main + some declared variants)
-  if ai.registered_strategies["generic_paladin"] then ai:enable("generic_paladin"); ai:enable("retribution"); ai:enable("protection"); ai:enable("holy") end
-  if ai.registered_strategies["rogue_generic"] then ai:enable("rogue_generic"); ai:enable("assassination"); ai:enable("combat"); ai:enable("subtlety") end
-  if ai.registered_strategies["priest_generic"] then ai:enable("priest_generic"); ai:enable("shadow"); ai:enable("holy_priest"); ai:enable("discipline") end
-  if ai.registered_strategies["dk_generic"] then ai:enable("dk_generic"); ai:enable("blood"); ai:enable("frost_dk"); ai:enable("unholy") end
-  if ai.registered_strategies["shaman_generic"] then ai:enable("shaman_generic"); ai:enable("elemental"); ai:enable("enhancement"); ai:enable("resto_shaman") end
-  if ai.registered_strategies["warlock_generic"] then ai:enable("warlock_generic"); ai:enable("destruction"); ai:enable("affliction"); ai:enable("demonology"); ai:enable("pet_management") end
-  if ai.registered_strategies["druid_generic"] then ai:enable("druid_generic"); ai:enable("balance"); ai:enable("feral"); ai:enable("resto_druid") end
+  local primary = detect_spec and detect_spec(cls) or nil
 
-  -- cls-based extras (for load_for_bot)
+  local function enable_if(name)
+    if name and ai.registered_strategies[name] then
+      ai:enable(name)
+      return true
+    end
+    return false
+  end
+
   if cls == 1 then
-    ai:enable("generic_warrior")
-    ai:enable("arms")
+    enable_if("generic_warrior")
+    enable_if(primary or "arms")
   elseif cls == 2 then
-    ai:enable("generic_paladin")
-    ai:enable("retribution")
+    enable_if("generic_paladin")
+    enable_if(primary or "retribution")
   elseif cls == 3 then
-    ai:enable("hunter_generic")
-    ai:enable("beast_mastery")
-    ai:enable("ranged")
-    ai:enable("pet_management")
+    enable_if("hunter_generic")
+    enable_if(primary or "beast_mastery")
+    enable_if("pet_management")
+    enable_if("ranged")
   elseif cls == 4 then
-    ai:enable("rogue_generic")
-    ai:enable("assassination")
+    enable_if("rogue_generic")
+    enable_if(primary or "assassination")
   elseif cls == 5 then
-    ai:enable("priest_generic")
-    ai:enable("shadow")
+    enable_if("priest_generic")
+    enable_if(primary or "shadow")
   elseif cls == 6 then
-    ai:enable("dk_generic")
-    ai:enable("blood")
+    enable_if("dk_generic")
+    enable_if(primary or "blood")
   elseif cls == 7 then
-    ai:enable("shaman_generic")
-    ai:enable("elemental")
+    enable_if("shaman_generic")
+    enable_if(primary or "elemental")
   elseif cls == 8 then
-    ai:enable("mage_generic")
-    ai:enable("fire")
+    enable_if("mage_generic")
+    enable_if(primary or "fire")
   elseif cls == 9 then
-    ai:enable("warlock_generic")
-    ai:enable("destruction")
-    ai:enable("pet_management")
+    enable_if("warlock_generic")
+    enable_if(primary or "destruction")
+    enable_if("pet_management")
   elseif cls == 11 then
-    ai:enable("druid_generic")
-    ai:enable("balance")
+    enable_if("druid_generic")
+    enable_if(primary or "balance")
+  else
+    -- Class not known yet: enable whatever generics were registered (rare).
+    enable_if("generic_warrior")
+    enable_if("arms")
   end
-  -- also ensure some additional declared specs are enabled for coverage (user can disable)
-  if cls == 1 then ai:enable("fury"); ai:enable("prot") end
-  if cls == 2 then ai:enable("protection"); ai:enable("holy") end
-  if cls == 4 then ai:enable("combat"); ai:enable("subtlety") end
-  if cls == 5 then ai:enable("holy_priest"); ai:enable("discipline") end
-  if cls == 6 then ai:enable("frost_dk"); ai:enable("unholy") end
-  if cls == 7 then ai:enable("enhancement"); ai:enable("resto_shaman") end
-  if cls == 9 then ai:enable("affliction"); ai:enable("demonology") end
-  if cls == 11 then ai:enable("feral"); ai:enable("resto_druid") end
 
+  if primary then
+    utils.log_decision("class defaults: primary spec='" .. tostring(primary) .. "' cls=" .. tostring(cls))
+  end
+end
+
+-- Switch primary combat spec (disables sibling specs, enables `name`).
+local function set_primary_spec(ai, name)
+  if not name or not ai.registered_strategies[name] then
+    return false
+  end
+  for _, s in ipairs(CLASS_SPEC_NAMES) do
+    if s ~= name then
+      ai:disable(s)
+    end
+  end
+  ai:enable(name)
+  utils.log_decision("set_primary_spec: " .. tostring(name))
+  return true
 end
 
 -- spec detection heuristics (called optionally from examples or after load; uses known high spells, auras, power)
-local function detect_spec(cls)
+detect_spec = function(cls)
   cls = cls or (bot and bot.get_class and bot.get_class()) or 0
   if not bot then return nil end
   -- wrap bot.* calls with pcall for safety (per review; avoids tick crashes if API throws)
@@ -253,79 +276,110 @@ local function create_ai_engine()
 
   ai:register_action("survive_low_health", function(ctx)
     local hp = ctx:get_value("health_pct") or 100
-    if hp < 25 then
-      utils.log_decision("low health (" .. math.floor(hp) .. "%) - attempting flee/revive logic")
-      -- basic: stop and perhaps move back or just log; potions require items not in basic API
-      bot.stop_moving()
-      -- could send .cooldown or eat but keep minimal and non-breaking
-      return true
+    if hp >= 25 then
+      return false
     end
-    return false
+    local in_combat = ctx:get_value("in_combat")
+    -- In combat: do not consume the tick (would starve rotation/melee) and do
+    -- not stop_moving — that thrash-repaths with engage_melee every ~200ms.
+    if in_combat then
+      return false
+    end
+    -- Out of combat + critical HP: force rest window, drop target, no new pulls.
+    utils.log_decision("low health (" .. math.floor(hp) .. "%) OOC — rest before next pull")
+    if bot.stop_moving then bot.stop_moving() end
+    if bot.stop_attack then pcall(function() bot.stop_attack() end) end
+    if bot.set_target then pcall(function() bot.set_target(0) end) end
+    local now = (bot.now_ms and (bot.now_ms() / 1000)) or os.time()
+    if ctx.set_blackboard then
+      ctx:set_blackboard("rest_until", now + 10)
+    end
+    return true
   end)
 
-  -- grind: improved target selection using values
+  -- Shared sticky chase for grind/melee (avoids repath thrash; uses interpolated unit.x/y/z).
+  local movement_lib = nil
+  local grind_chase = nil
+  do
+    local okm, mod = pcall(dofile, "scripts/lib/movement.lua")
+    if okm and mod then
+      movement_lib = mod
+      grind_chase = mod.new_chase({ repath_period = 1.0, dest_slack = 3.5, min_gap = 0.35 })
+    end
+  end
+  local targeting_lib = nil
+  do
+    local okt, mod = pcall(dofile, "scripts/lib/targeting.lua")
+    if okt and mod then targeting_lib = mod end
+  end
+
+  -- grind: prefer scripts/lib/targeting (permissive + blacklist); fall back to legacy scan
   ai:register_action("select_grind_target", function(ctx)
+    -- Rest window after low-HP: do not pull until rest_until expires.
+    local rest_until = ctx.get_blackboard and ctx:get_blackboard("rest_until")
+    if rest_until then
+      local now = (bot.now_ms and (bot.now_ms() / 1000)) or os.time()
+      if now < rest_until then
+        return false
+      end
+      if ctx.set_blackboard then ctx:set_blackboard("rest_until", nil) end
+    end
+
     -- gate: if already have live target, don't consume (let melee/ranged/loot participate)
     local tg = bot and bot.get_target and bot.get_target() or 0
     if tg ~= 0 and tg ~= "0" then
       local u = bot and bot.get_unit and bot.get_unit(tg) or nil
-      if u and u.is_alive and (u.health or 0) > 0 then return false end
+      local live = u and u.is_alive ~= false and ((u.max_health or 0) == 0 or (u.health or 0) > 0)
+      if live then
+        return false
+      end
+      -- Dead / missing: short blacklist so we don't re-stick to the corpse.
+      if targeting_lib and targeting_lib.blacklist then
+        targeting_lib.blacklist(tg, 12)
+      end
+      if bot.set_target then pcall(function() bot.set_target(0) end) end
+      if bot.stop_attack then pcall(function() bot.stop_attack() end) end
     end
-    if not bot.get_nearby_units then return false end
-    local units = bot.get_nearby_units(30)
+
+    -- Always use shared targeting (critter / vendor / dead filters). Never fall
+    -- back to a permissive scan that picks 1-HP rabbits and then path-fails.
     local best = nil
-    local best_score = 999999
-    local my_level = bot.get_level and bot.get_level() or 1
-
-    for _, u in ipairs(units) do
-      local flags = u.flags or 0
-      local npc = u.npc_flags or 0
-      local non_attack = (flags % 4 >= 2)           -- NON_ATTACKABLE (0x2)
-                      or (flags % 2097152 >= 1048576) -- TAXI_FLIGHT (0x100000) from AC _IsValidAttackTarget
-                      or (flags % 256 >= 128)       -- NOT_ATTACKABLE_1 (0x80)
-                      or (flags % 512 >= 256)       -- IMMUNE_TO_PC (0x100)
-                      or (flags % 131072 >= 65536)  -- NON_ATTACKABLE_2 (0x10000)
-                      or (flags % 33554432 >= 16777216) -- NOT_SELECTABLE (0x2000000)
-      local fac = u.faction or 0
-      local friendlyFacs = { [35]=true, [11]=true, [12]=true, [13]=true, [55]=true, [57]=true, [59]=true, [60]=true,
-                             [4]=true, [5]=true, [6]=true, [161]=true, [162]=true }
-      if friendlyFacs[fac] then
-        non_attack = true
-      end
-      if u.is_alive and not u.is_player and not non_attack and npc == 0 then
-        -- extra: health 0 means dead even if is_alive flag lags (prevents attacking corpses)
-        if (u.health or 0) > 0 then
-          local dist = u.distance or 999
-          local lvl = u.level or 1
-          local lvl_diff = math.abs(lvl - my_level)
-          -- improved scoring: favor close + similar level (better than basic grind)
-          local score = dist + (lvl_diff * 3)
-          if score < best_score and dist > 1 and dist < 30 then
-            best = u
-            best_score = score
-          end
-        end
-      end
+    if targeting_lib and targeting_lib.find_best_hostile then
+      best = targeting_lib.find_best_hostile({ max_dist = 40 })
+    end
+    if not best then
+      return false
+    end
+    -- Hard reject tiny critters even if a filter was bypassed.
+    if (best.max_health or 0) > 0 and (best.max_health or 0) <= 5 then
+      if targeting_lib.blacklist then targeting_lib.blacklist(best.guid, 60) end
+      return false
     end
 
-    if best then
-      bot.set_target(best.guid)
-      utils.log_decision("grind target: " .. tostring(best.guid) .. " dist=" .. math.floor(best.distance or 0) .. " fac=" .. tostring(best.faction or 0))
-      -- Face before committing to attack (critical: incorrect target/facing -> server sends SMSG_ATTACKSWING_* notifying packet)
-      if bot.set_sheath then pcall(function() bot.set_sheath(0) end) end
-      if bot.face_target then pcall(function() bot.face_target(best.guid) end) end
-      -- initiate attack/move here too for responsiveness
-      if (best.distance or 0) > 3.5 then
-        bot.move_to(best.x, best.y, best.z)
-      else
-        bot.stop_moving()
-        -- Set target immediately before attack so external observers can see the bot's current attack target
-        if bot.set_target then pcall(function() bot.set_target(best.guid) end) end
-        bot.attack(best.guid)
-      end
-      return true
+    bot.set_target(best.guid)
+    utils.log_decision(
+      string.format(
+        "grind target entry=%s dist=%.1f fac=%s hp=%s/%s pos=(%.1f,%.1f,%.1f)",
+        tostring(best.entry),
+        best.distance or -1,
+        tostring(best.faction or 0),
+        tostring(best.health or "?"),
+        tostring(best.max_health or "?"),
+        best.x or 0,
+        best.y or 0,
+        best.z or 0
+      )
+    )
+    if bot.set_sheath then pcall(function() bot.set_sheath(0) end) end
+    -- Always path toward the unit first; engage_melee will swing when close.
+    -- Never open with ATTACKSWING at range (causes "stare" + NOT_IN_RANGE spam).
+    if grind_chase then
+      grind_chase:to_unit(best)
+    elseif best.x ~= nil and best.y ~= nil and bot.move_to then
+      bot.move_to(tonumber(best.x) or 0, tonumber(best.y) or 0, tonumber(best.z) or 0)
     end
-    return false
+    if bot.face_target then pcall(function() bot.face_target(best.guid) end) end
+    return true
   end)
 
   -- Siege / PvP actions (registered always so scenario can enable("siege"))
@@ -349,49 +403,90 @@ local function create_ai_engine()
     return false
   end)
 
-  -- melee basics
+  -- melee basics (sticky chase via grind_chase when available)
   ai:register_action("engage_melee", function(ctx)
     local tg = bot.get_target and bot.get_target() or 0
     if tg == 0 or tg == "0" then return false end
     local u = bot.get_unit and bot.get_unit(tg) or nil
-    if not u or not u.is_alive or (u.health or 0) <= 0 then return false end
-    -- Face the target before attacking (server will notify via SMSG_ATTACKSWING_BADFACING etc if bad facing)
-    if bot.set_sheath then pcall(function() bot.set_sheath(0) end) end -- unsheathe for melee
-    if bot.face_target then pcall(function() bot.face_target(tg) end) end
-    local d = u.distance or 0
-    if d > 3.5 then
-      bot.move_to(u.x, u.y, u.z)
-    else
-      bot.stop_moving()
-      -- Set target immediately before attack so external observers can see the bot's current attack target
-      if bot.set_target then pcall(function() bot.set_target(tg) end) end
-      bot.attack(tg)
+    if not u or u.is_alive == false or ((u.max_health or 0) > 0 and (u.health or 0) <= 0) then
+      return false
     end
+    -- Skip 1-HP ambient units that slip past filters.
+    if (u.max_health or 0) > 0 and (u.max_health or 0) <= 5 then
+      if targeting_lib and targeting_lib.blacklist then targeting_lib.blacklist(tg, 30) end
+      if bot.set_target then pcall(function() bot.set_target(0) end) end
+      return false
+    end
+    if bot.set_sheath then pcall(function() bot.set_sheath(0) end) end
+
+    -- Prefer geometric 3D distance (Z matters on hills; 2D can look "in melee"
+    -- while the server rejects with NOT_IN_RANGE).
+    local d = tonumber(u.distance) or 99
+    if bot.get_position and u.x ~= nil and u.y ~= nil then
+      local px, py, pz = bot.get_position()
+      px, py, pz = px or 0, py or 0, pz or 0
+      local dx = (tonumber(u.x) or 0) - px
+      local dy = (tonumber(u.y) or 0) - py
+      local dz = (tonumber(u.z) or pz) - pz
+      local d3 = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if d3 > d then d = d3 end
+    end
+
+    if d > 3.2 then
+      if grind_chase then
+        grind_chase:to_unit(u)
+      elseif bot.move_to and u.x ~= nil and u.y ~= nil then
+        bot.move_to(tonumber(u.x) or 0, tonumber(u.y) or 0, tonumber(u.z) or 0)
+      end
+      return true
+    end
+    if bot.face_target then pcall(function() bot.face_target(tg) end) end
+    if grind_chase then grind_chase:reset() end
+    if movement_lib and movement_lib.stop_if_moving then
+      movement_lib.stop_if_moving()
+    elseif bot.stop_moving then
+      bot.stop_moving()
+    end
+    if bot.set_target then pcall(function() bot.set_target(tg) end) end
+    bot.attack(tg)
     return true
   end)
 
-  -- ranged basics (same engage logic; future will use cast at range)
+  -- ranged basics: only for true ranged classes (enabled selectively).
+  -- Never white-swing from 8–25y — that freezes melee bots in "look at mob" pose.
   ai:register_action("engage_ranged", function(ctx)
     local tg = bot.get_target and bot.get_target() or 0
     if tg == 0 or tg == "0" then return false end
     local u = bot.get_unit and bot.get_unit(tg) or nil
-    if not u or not u.is_alive or (u.health or 0) <= 0 then return false end
-    if bot.face_target then pcall(function() bot.face_target(tg) end) end
-    local d = u.distance or 0
-    if d > 25 then
-      bot.move_to(u.x, u.y, u.z)
-    elseif d > 8 then
-      -- try keep range but basic: stop and attack (auto shot equiv via attack)
-      bot.stop_moving()
-      -- Set target immediately before attack so external observers can see the bot's current attack target
-      if bot.set_target then pcall(function() bot.set_target(tg) end) end
-      bot.attack(tg)
-    else
-      bot.stop_moving()
-      -- Set target immediately before attack so external observers can see the bot's current attack target
-      if bot.set_target then pcall(function() bot.set_target(tg) end) end
-      bot.attack(tg)
+    if not u or u.is_alive == false or ((u.max_health or 0) > 0 and (u.health or 0) <= 0) then
+      return false
     end
+    local d = u.distance or 99
+    if bot.get_position and u.x ~= nil then
+      local px, py, pz = bot.get_position()
+      local dx = (tonumber(u.x) or 0) - (px or 0)
+      local dy = (tonumber(u.y) or 0) - (py or 0)
+      local dz = (tonumber(u.z) or 0) - (pz or 0)
+      local d3 = math.sqrt(dx * dx + dy * dy + dz * dz)
+      if d3 > d then d = d3 end
+    end
+    if bot.face_target then pcall(function() bot.face_target(tg) end) end
+    -- Close into shoot range (≤30); only stop+auto when actually in range.
+    if d > 30 then
+      if bot.move_to and u.x ~= nil then
+        bot.move_to(tonumber(u.x) or 0, tonumber(u.y) or 0, tonumber(u.z) or 0)
+      end
+      return true
+    end
+    if d > 5 and d <= 30 then
+      if bot.stop_moving then bot.stop_moving() end
+      if bot.set_target then pcall(function() bot.set_target(tg) end) end
+      bot.attack(tg)
+      return true
+    end
+    -- Too close for comfort: step out slightly for hunters; still attack.
+    if bot.set_target then pcall(function() bot.set_target(tg) end) end
+    bot.attack(tg)
     return true
   end)
 
@@ -473,14 +568,97 @@ local function create_ai_engine()
     return false
   end)
 
-  -- rest
+  -- rest: OOC heal-up between pulls (beats grind select when HP/power low).
+  -- Yields to lootable corpses so we do not skip loot while recovering, but
+  -- still arms rest_until so select_grind_target (relevance 25–30) cannot
+  -- steal the tick from loot_nearby (15–20) while HP/power is low.
   ai:register_action("rest_if_low", function(ctx)
-    if ctx:get_value("in_combat") then return false end
+    if ctx:get_value("in_combat") then
+      if ctx.set_blackboard then ctx:set_blackboard("rest_until", nil) end
+      return false
+    end
+    local now = (bot.now_ms and (bot.now_ms() / 1000)) or os.time()
     local hp = ctx:get_value("health_pct") or 100
     local pp = ctx:get_value("power_pct") or 100
-    if hp < 40 or pp < 30 then
-      utils.log_decision("rest: low resources, pausing")
-      bot.stop_moving()
+    -- Rage/runic/energy recover in combat; only mana casters rest on low power.
+    local power_type = bot.get_power_type and bot.get_power_type() or 0
+    local low_power = (power_type == 0) and pp < 25 -- 0 = mana
+    local needs_rest = (hp < 40) or low_power
+
+    local function arm_rest_until()
+      if not needs_rest then return end
+      local secs = (hp < 25) and 10 or 6
+      if ctx.set_blackboard then ctx:set_blackboard("rest_until", now + secs) end
+    end
+
+    -- Prefer looting first: return false so loot_nearby can run, but arm the
+    -- rest window first so grind cannot pull while we recover.
+    if bot.get_nearby_units then
+      for _, u in ipairs(bot.get_nearby_units(12) or {}) do
+        if not u.is_player and (u.lootable or u.is_alive == false) and (u.distance or 99) < 10 then
+          arm_rest_until()
+          return false
+        end
+      end
+    end
+    local rest_until = ctx.get_blackboard and ctx:get_blackboard("rest_until")
+    if rest_until and now < rest_until then
+      if bot.stop_moving then bot.stop_moving() end
+      return true
+    end
+    -- Resume grinding once mostly healthy (don't stick in rest at 50% forever).
+    if needs_rest then
+      local secs = (hp < 25) and 10 or 6
+      if ctx.set_blackboard then ctx:set_blackboard("rest_until", now + secs) end
+      utils.log_decision(
+        "rest: low resources (hp="
+          .. math.floor(hp)
+          .. "% power="
+          .. math.floor(pp)
+          .. "%) — wait "
+          .. secs
+          .. "s"
+      )
+      if bot.stop_moving then bot.stop_moving() end
+      if bot.stop_attack then pcall(function() bot.stop_attack() end) end
+      return true
+    end
+    return false
+  end)
+
+  -- wander when idle (no target, not resting) — small steps only (avoid huge detours)
+  local wander_lib = nil
+  do
+    local okw, wmod = pcall(dofile, "scripts/lib/movement.lua")
+    if okw and wmod then wander_lib = wmod.new_wander({ period = 3.0, radius = 12 }) end
+  end
+  ai:register_action("wander_idle", function(ctx)
+    if ctx:get_value("in_combat") then return false end
+    local rest_until = ctx.get_blackboard and ctx:get_blackboard("rest_until")
+    if rest_until then
+      local now = (bot.now_ms and (bot.now_ms() / 1000)) or os.time()
+      if now < rest_until then return false end
+    end
+    local tg = bot.get_target and bot.get_target() or 0
+    if tg ~= 0 and tg ~= "0" then
+      local u = bot.get_unit and bot.get_unit(tg) or nil
+      if u and u.is_alive ~= false and ((u.max_health or 0) == 0 or (u.health or 0) > 0) then
+        return false
+      end
+    end
+    -- Prefer another hostile nearby over wandering off into the distance.
+    if targeting_lib and targeting_lib.find_best_hostile then
+      local b = targeting_lib.find_best_hostile({ max_dist = 40 })
+      if b then return false end
+    end
+    if wander_lib then
+      return wander_lib:step()
+    end
+    if bot.get_position and bot.move_to then
+      local x, y, z = bot.get_position()
+      local t = (bot.now_ms and bot.now_ms() or 0) / 1000
+      local a = (t * 11.3) % (2 * math.pi)
+      bot.move_to((x or 0) + math.cos(a) * 8, (y or 0) + math.sin(a) * 8, z or 0)
       return true
     end
     return false
@@ -542,14 +720,23 @@ local function create_ai_engine()
   -- attach convenience for default enable (supports ai = dofile(); ai:enable_default_strategies())
   function ai:enable_default_strategies()
     self:enable("survive")
+    self:enable("rest")
     self:enable("grind")
     self:enable("loot")
     self:enable("melee")
-    self:enable("ranged")
-    -- optionals (users can enable("follow") etc explicitly for simple rpg modes)
-    -- if class strats were registered, enable a basic set for the class (shared logic)
+    -- Ranged engage must NOT be on for melee classes: its relevance (9) beats
+    -- engage_melee (7) and it stop_moving+swing at 8–25y → "stare from range".
+    local cls = (bot and bot.get_class and bot.get_class()) or 0
+    if cls == 3 or cls == 5 or cls == 8 or cls == 9 then -- hunter, priest, mage, warlock
+      self:enable("ranged")
+    end
+    -- Single primary class spec only (see enable_class_defaults).
     enable_class_defaults(self)
     return self
+  end
+
+  function ai:set_primary_spec(name)
+    return set_primary_spec(self, name)
   end
 
   -- helper for enabling simple rpg/noncombat generics (addresses review)

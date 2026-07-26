@@ -18,8 +18,10 @@ function MeleeStrategy:getType()
 end
 
 function MeleeStrategy:getDefaultActions()
+  -- Below class ability defaults (MS/rend/execute ~11–25) so rotation casts try first;
+  -- still above wander so we keep auto-attack and sticky chase when spells are not ready.
   return {
-    {name = "engage_melee", relevance = 10},
+    {name = "engage_melee", relevance = 7},
   }
 end
 

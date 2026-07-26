@@ -757,6 +757,10 @@ type WorldClient struct {
 	// OnSpellCastResult reports SPELL_GO (success) or SPELL_FAILURE / CAST_FAILED.
 	// failReason is 0 on success; otherwise the server reason byte when available.
 	OnSpellCastResult func(spellID uint32, success bool, failReason uint8)
+	// OnServerRelocate fires when the server forcibly moves the player (charge,
+	// blink, knockback, monster-move spline on self). Bot must abort local paths
+	// or updateMovement will write pre-relocate coords back over the new pose.
+	OnServerRelocate func(x, y, z, o float32, reason string)
 	// OnSessionPhase fires on every session phase transition.
 	OnSessionPhase func(c SessionPhaseChange)
 	// OnProtocolWarning fires when we send gameplay opcodes outside PhaseInWorld.
@@ -3653,6 +3657,33 @@ func (w *WorldClient) handleDestroyObject(data []byte) {
 	w.removeObject(guid)
 }
 
+func (w *WorldClient) isSelfGUID(guid uint64) bool {
+	if w.charGUID == 0 || guid == 0 {
+		return false
+	}
+	return guid == w.charGUID || (guid&0xFFFFFFFF) == (w.charGUID&0xFFFFFFFF)
+}
+
+// applySelfServerRelocate updates local player pose and notifies the bot so the
+// movement controller cannot keep heartbeating pre-relocate coordinates (Charge
+// would otherwise "rubber-band" back to the cast position).
+// Pose writes go through moveMu (same path as UpdatePosition). After the
+// OnServerRelocate callback aborts the controller we re-assert pose so a
+// concurrent updateMovement cannot leave pre-relocate coords published.
+func (w *WorldClient) applySelfServerRelocate(x, y, z float32, reason string) {
+	w.moveMu.Lock()
+	o := w.orientation
+	w.setPositionLocked(x, y, z, o)
+	cb := w.OnServerRelocate
+	w.moveMu.Unlock()
+	if cb != nil {
+		cb(x, y, z, o, reason)
+	}
+	w.moveMu.Lock()
+	w.setPositionLocked(x, y, z, o)
+	w.moveMu.Unlock()
+}
+
 func (w *WorldClient) handleMonsterMove(data []byte) {
 	if len(data) < 16 {
 		return
@@ -3674,6 +3705,8 @@ func (w *WorldClient) handleMonsterMove(data []byte) {
 	binary.Read(r, binary.LittleEndian, &posX)
 	binary.Read(r, binary.LittleEndian, &posY)
 	binary.Read(r, binary.LittleEndian, &posZ)
+
+	selfMove := w.isSelfGUID(guid)
 
 	// Accept MONSTER_MOVE before CREATE_OBJECT so delayed creates do not leave us
 	// stuck with a later create's older spawn/start pose only.
@@ -3712,6 +3745,9 @@ func (w *WorldClient) handleMonsterMove(data []byte) {
 		obj.DestX = posX
 		obj.DestY = posY
 		obj.DestZ = posZ
+		if selfMove {
+			w.applySelfServerRelocate(posX, posY, posZ, "monster_move_stop")
+		}
 		return
 	}
 
@@ -3765,45 +3801,48 @@ func (w *WorldClient) handleMonsterMove(data []byte) {
 	}
 
 	if waypointCount == 0 {
+		if selfMove {
+			w.applySelfServerRelocate(posX, posY, posZ, "monster_move_empty")
+		}
 		return
 	}
 
 	// For CatmullRom (flag 0x00000008), waypoints are full Vector3 positions
 	// For linear paths, first point after count is the destination, rest are packed
+	var destX, destY, destZ float32
 	if splineFlags&0x00000008 != 0 {
 		// CatmullRom: read all waypoints, last one is destination
-		var lastX, lastY, lastZ float32
 		for i := uint32(0); i < waypointCount; i++ {
-			binary.Read(r, binary.LittleEndian, &lastX)
-			binary.Read(r, binary.LittleEndian, &lastY)
-			binary.Read(r, binary.LittleEndian, &lastZ)
+			binary.Read(r, binary.LittleEndian, &destX)
+			binary.Read(r, binary.LittleEndian, &destY)
+			binary.Read(r, binary.LittleEndian, &destZ)
 		}
-		obj.StartX = obj.PosX
-		obj.StartY = obj.PosY
-		obj.StartZ = obj.PosZ
-		obj.DestX = lastX
-		obj.DestY = lastY
-		obj.DestZ = lastZ
-		obj.IsMoving = true
-		obj.MoveStartTime = time.Now()
-		obj.MoveDuration = time.Duration(duration) * time.Millisecond
 	} else {
 		// Linear: destination is the first Vector3 after the count
-		var destX, destY, destZ float32
 		binary.Read(r, binary.LittleEndian, &destX)
 		binary.Read(r, binary.LittleEndian, &destY)
 		binary.Read(r, binary.LittleEndian, &destZ)
-		obj.StartX = obj.PosX
-		obj.StartY = obj.PosY
-		obj.StartZ = obj.PosZ
-		obj.DestX = destX
-		obj.DestY = destY
-		obj.DestZ = destZ
-		obj.IsMoving = true
-		obj.MoveStartTime = time.Now()
-		obj.MoveDuration = time.Duration(duration) * time.Millisecond
 	}
+	obj.StartX = obj.PosX
+	obj.StartY = obj.PosY
+	obj.StartZ = obj.PosZ
+	obj.DestX = destX
+	obj.DestY = destY
+	obj.DestZ = destZ
+	obj.IsMoving = true
+	obj.MoveStartTime = time.Now()
+	obj.MoveDuration = time.Duration(duration) * time.Millisecond
 
+	if selfMove {
+		// Charge/intercept/etc.: server owns the spline. Snap to the destination so
+		// local path following cannot rubber-band us back to the cast origin.
+		// Short-duration forced moves should land immediately for AI purposes.
+		if duration <= 1500 || duration == 0 {
+			w.applySelfServerRelocate(destX, destY, destZ, "monster_move_charge")
+		} else {
+			w.applySelfServerRelocate(posX, posY, posZ, "monster_move_self")
+		}
+	}
 }
 
 func (w *WorldClient) handleMonsterMoveTransport(data []byte) {

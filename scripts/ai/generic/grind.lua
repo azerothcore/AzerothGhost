@@ -22,6 +22,8 @@ end
 function GrindStrategy:getDefaultActions()
   return {
     {name = "select_grind_target", relevance = 25},
+    -- Very low: only when no target / not resting / not casting
+    {name = "wander_idle", relevance = 2},
   }
 end
 

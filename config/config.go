@@ -173,44 +173,86 @@ func findProfile(name string) string {
 }
 
 func loadYAML(path string, out *CLIConfig) error {
-	// Minimal loader for now (profiles can be supported via env or future expansion).
-	// Avoids external dep for initial build after restore.
+	// Minimal key: value parser (no external YAML dep). Supports multiline
+	// blocks only as "key: |" start markers (value ignored for multi-line
+	// lua_code — pass --lua-script instead for real scripts).
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
-	// Very basic key: value parser for common fields (sufficient for E2E profile use).
 	s := string(b)
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
+	lines := strings.Split(s, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		if idx := strings.Index(line, ":"); idx > 0 {
-			k := strings.TrimSpace(line[:idx])
-			v := strings.Trim(strings.TrimSpace(line[idx+1:]), `"'`)
-			switch k {
-			case "auth_server", "auth-server":
-				out.AuthServer = v
-			case "data_dir", "data-dir":
-				out.DataDir = v
-			case "username":
-				out.Username = v
-			case "password":
-				out.Password = v
-			case "char_name", "char-name", "character_name":
-				out.CharName = v
-			case "account_prefix", "account-prefix":
-				out.AccountPrefix = v
-			case "account_password", "account-password":
-				out.AccountPassword = v
-			case "num_bots", "num-bots":
-				if n, err := strconv.Atoi(v); err == nil {
-					out.NumBots = n
+		idx := strings.Index(line, ":")
+		if idx <= 0 {
+			continue
+		}
+		k := strings.TrimSpace(line[:idx])
+		v := strings.TrimSpace(line[idx+1:])
+		// Skip multi-line YAML block scalars (lua_code: | ...)
+		if v == "|" || v == ">" || v == "|-" || v == ">-" {
+			for i+1 < len(lines) {
+				next := lines[i+1]
+				if len(next) > 0 && (next[0] == ' ' || next[0] == '\t') {
+					i++
+					continue
 				}
-			case "nodes":
-				out.Nodes = v
+				break
 			}
+			continue
+		}
+		v = strings.Trim(v, `"'`)
+		switch k {
+		case "auth_server", "auth-server":
+			out.AuthServer = v
+		case "data_dir", "data-dir":
+			out.DataDir = v
+		case "username":
+			out.Username = v
+		case "password":
+			out.Password = v
+		case "char_name", "char-name", "character_name":
+			out.CharName = v
+		case "bot_mode", "bot-mode", "mode":
+			if v != "" {
+				out.BotMode = v
+			}
+		case "lua_script", "lua-script":
+			out.LuaScript = v
+		case "race":
+			if n, err := strconv.Atoi(v); err == nil {
+				out.Race = n
+			}
+		case "class":
+			if n, err := strconv.Atoi(v); err == nil {
+				out.Class = n
+			}
+		case "delete_existing_chars", "delete-existing-chars":
+			out.DeleteExistingChars = v == "true" || v == "yes" || v == "1"
+		case "log_decisions_to_chat", "log-decisions-to-chat":
+			out.LogDecisionsToChat = v == "true" || v == "yes" || v == "1"
+		case "realm_index", "realm-index":
+			if n, err := strconv.Atoi(v); err == nil {
+				out.RealmIndex = n
+			}
+		case "account_prefix", "account-prefix":
+			out.AccountPrefix = v
+		case "account_password", "account-password":
+			out.AccountPassword = v
+		case "num_bots", "num-bots":
+			if n, err := strconv.Atoi(v); err == nil {
+				out.NumBots = n
+			}
+		case "nodes":
+			out.Nodes = v
+		case "validation_mode", "validation-mode":
+			out.ValidationMode = v == "true" || v == "yes" || v == "1"
+		case "validation_log", "validation-log":
+			out.ValidationLogPath = v
 		}
 	}
 	return nil

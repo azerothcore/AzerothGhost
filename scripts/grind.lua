@@ -1,83 +1,98 @@
--- grind.lua — thin warrior entrypoint for melee grind.
--- Core logic lives in scripts/lib/* so other scripts can reuse it.
+-- grind.lua — production grind entry using the advanced strategy AI.
+--
+-- Behaviour (scripts/ai/*):
+--   survive  death revive; critical HP OOC rests (no new pulls)
+--   rest     OOC heal-up when HP is low (mana classes also rest on low mana)
+--   grind    hostile pick (scripts/lib/targeting) + idle wander
+--   loot     corpses when safe
+--   melee    sticky chase + auto-attack (below class ability priority)
+--   class    one primary spec rotation (not all specs at once)
+--
+-- Teleport/summon: engine polls bot.consume_teleport() and clears sticky state.
 --
 --   ./azghost --profile local-ac cli --bot-mode lua --lua-script scripts/grind.lua
+--
+-- Thin sticky-melee only: scripts/lib/melee_grind.lua
 
-local melee_grind = dofile("scripts/lib/melee_grind.lua")
+local boot = dofile("scripts/ai/init.lua")
 
--- Prefer shared spell table when present
-local SPELLS = {
-  HEROIC_STRIKE = 78,
-  REND = 772,
-  CHARGE = 100,
-  EXECUTE = 5308,
-  BATTLE_SHOUT = 6673, -- real shout (not 2457 stance)
-  VICTORY_RUSH = 34428,
-  SUNDER_ARMOR = 7386,
-}
-local ok, data = pcall(dofile, "scripts/ai/data/warrior_spells.lua")
-if ok and data and data.SPELLS then
-  for k, v in pairs(data.SPELLS) do
-    if SPELLS[k] == nil then
-      SPELLS[k] = v
-    end
+-- Rebuild after bot.get_class() is valid; enables survive/rest/grind/loot/melee + one spec.
+local ai
+if boot.load_for_bot then
+  ai = boot.load_for_bot()
+else
+  ai = boot
+  if ai.enable_default_strategies then ai:enable_default_strategies() end
+end
+
+local boot_at = (bot and bot.now_ms and bot.now_ms() / 1000) or os.time()
+local SETTLE = 0.8
+local prepped = false
+
+-- GM/dev accounts: brand-new level-1 toons have no weapon/spells and will only
+-- "stare" at mobs. Best-effort prep (commands no-op if not GM).
+local function ensure_combat_ready()
+  if prepped or not bot or not bot.send_command then return end
+  prepped = true
+  local cls = bot.get_class and bot.get_class() or 0
+  local level = bot.get_level and bot.get_level() or 1
+
+  -- Always equip a white weapon and unsheathe so auto-attack can land.
+  bot.send_command(".additem 25 1") -- Worn Shortsword
+  bot.send_command(".equip 25")
+  if bot.set_sheath then pcall(bot.set_sheath, 0) end
+
+  if level < 6 then
+    bot.send_command(".level 6")
+    if bot.set_level then pcall(bot.set_level, 6) end
   end
-  -- Prefer researched aura id for shout when provided
-  if data.AURAS and data.AURAS.BATTLE_SHOUT then
-    SPELLS.BATTLE_SHOUT_AURA = data.AURAS.BATTLE_SHOUT
+
+  if cls == 1 then
+    -- Learn Battle Stance once (2457). Do NOT re-cast stance every tick — it
+    -- wastes GCD, can dump rage on some cores, and does nothing if already in it.
+    bot.send_command(".learn 2457")
+    bot.send_command(".cast 2457") -- enter stance once at prep
+    -- Real Battle Shout is 6673 (not 2457).
+    local spells = { 6673, 772, 100, 78, 5308, 34428, 7386, 6343, 2687 }
+    for _, id in ipairs(spells) do
+      bot.send_command(".learn " .. tostring(id))
+    end
+    if bot.log then bot.log("grind: warrior combat prep (stance once + kit + weapon)") end
+  elseif bot.log then
+    bot.log("grind: generic combat prep class=" .. tostring(cls) .. " (weapon+level)")
   end
 end
 
-local COSTS = {
-  [SPELLS.HEROIC_STRIKE] = 15,
-  [SPELLS.REND] = 10,
-  [SPELLS.EXECUTE] = 15,
-  [SPELLS.BATTLE_SHOUT] = 10,
-  [SPELLS.SUNDER_ARMOR] = 15,
-  [SPELLS.CHARGE] = 0,
-  [SPELLS.VICTORY_RUSH] = 0,
-}
-
-local controller = melee_grind.new({
-  spells = SPELLS,
-  costs = COSTS,
-  charge_spell = SPELLS.CHARGE,
-  shout_spell = SPELLS.BATTLE_SHOUT,
-  scan_range = 40,
-  melee_stop = 2.8,
-  melee_chase = 4.5,
-  settle = 0.5,
-  wander = { period = 2.0, radius = 24 },
-  chase = { repath_period = 1.2, dest_slack = 5.0, min_gap = 0.5 },
-  rotation = function(ctx)
-    local S = ctx.spells
-    local c = ctx.caster
-    local r = ctx.rage
-    if S.EXECUTE and ctx.hp_pct < 20 and r >= 15 then
-      if c:try_cast(S.EXECUTE, ctx.guid) then
-        return
-      end
-    end
-    if S.VICTORY_RUSH and c:try_cast(S.VICTORY_RUSH, ctx.guid) then
-      return
-    end
-    if S.REND and bot.has_aura_on and not bot.has_aura_on(ctx.guid, S.REND) and r >= 10 then
-      if c:try_cast(S.REND, ctx.guid) then
-        return
-      end
-    end
-    -- Surplus rage only — avoids NO_POWER spam on HS
-    if S.HEROIC_STRIKE and r >= 45 then
-      if c:try_cast(S.HEROIC_STRIKE, ctx.guid) then
-        return
-      end
-    end
-    if S.SUNDER_ARMOR and r >= 30 then
-      c:try_cast(S.SUNDER_ARMOR, ctx.guid)
-    end
-  end,
-})
+if bot and bot.log then
+  local cls = bot.get_class and bot.get_class() or "?"
+  local spec = ai.detect_spec and ai.detect_spec() or nil
+  bot.log(string.format(
+    "grind: advanced AI ready class=%s primary_spec=%s",
+    tostring(cls),
+    tostring(spec or "default")
+  ))
+end
 
 function on_tick()
-  controller:tick()
+  local now = (bot and bot.now_ms and bot.now_ms() / 1000) or os.time()
+  if (now - boot_at) < SETTLE then
+    return
+  end
+
+  -- Teleport first (also handled inside ai:Tick; consume once here for settle reset).
+  if bot and bot.consume_teleport and bot.consume_teleport() then
+    boot_at = now
+    if ai.set_blackboard then
+      ai:set_blackboard("rest_until", nil)
+      ai:set_blackboard("teleported", true)
+    end
+    if bot.stop_moving then pcall(bot.stop_moving) end
+    if bot.stop_attack then pcall(bot.stop_attack) end
+    if bot.set_target then pcall(bot.set_target, 0) end
+    if bot.log then bot.log("grind: teleport interrupt — settle + restart AI") end
+    return
+  end
+
+  ensure_combat_ready()
+  ai:Tick()
 end

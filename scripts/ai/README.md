@@ -4,23 +4,23 @@ This directory contains the Lua-native Strategy + Trigger + Action + Value AI fr
 inspired by playerbots but implemented 100% in idiomatic Lua for extensibility via AIBundles.
 
 Note on style: ai/ files (core/generic) use 2-space indentation to match the library-style
-in scripts/lib/behaviors.lua (and setup.lua when present). User on_tick examples (grind.lua, hogger.lua)
-use 4 spaces.
+in scripts/lib/behaviors.lua (and setup.lua when present).
+
+**Default grind entry:** `scripts/grind.lua` loads this framework (survive / rest / class
+rotations). The thin sticky-melee loop lives in `scripts/lib/melee_grind.lua` for reuse.
 
 ## Usage (from on_tick or bundle main)
 
 ```lua
 local ai = dofile("scripts/ai/init.lua")
-ai:enable_default_strategies()
+ai:enable_default_strategies()  -- survive, rest, grind, loot, melee, ranged, class
 
 function on_tick()
-  if not bot.is_alive() then
-    if bot.send_guild_command then bot.send_guild_command(".revive") else bot.send_command(".revive") end
-    return
-  end
-  ai:Tick()
+  ai:Tick()  -- death revive + low-HP rest are inside survive/rest strategies
 end
 ```
+
+Or simply: `--lua-script scripts/grind.lua`
 
 ## Structure
 

@@ -57,6 +57,21 @@ function M.is_attackable_mob(u, opts)
   if mhp == 0 and u.is_alive == false then
     return false, "dead_flag"
   end
+  -- Critters / ambient (rabbits entry 721, etc.): tiny HP — never grind these.
+  if mhp > 0 and mhp <= 10 then
+    return false, "critter"
+  end
+  if mhp == 0 and (hp or 0) > 0 and (hp or 0) <= 10 then
+    return false, "critter_hp"
+  end
+  -- Known ambient critter entries (Elwynn / start zones).
+  local entry = tonumber(u.entry) or 0
+  if entry == 721 or entry == 883 or entry == 2620 or entry == 4075 then
+    -- 4075 is rat — actually attackable; only skip true critters
+    if entry ~= 4075 then
+      return false, "critter_entry"
+    end
+  end
 
   local npc = u.npc_flags or 0
   -- Skip clear civilians only (not every non-zero npc flag)
