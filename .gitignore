@@ -24,6 +24,9 @@ val-*.jsonl
 validation-runs/
 *.log
 
+# Private live-stack e2e (local AC/TC9 runs; not published)
+e2e/local/
+
 # AC data extracts (never commit)
 ac-data/
 mmaps/

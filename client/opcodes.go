@@ -60,6 +60,21 @@ func IsHighValueTraceOpcode(op uint16) bool {
 	// Loot (validation scripts)
 	case CmsgLoot, SmsgLootResponse, CmsgLootRelease, SmsgLootReleaseResponse:
 		return true
+	// Inventory push (charter buy, .additem, bank withdraw)
+	case SmsgItemPushResult:
+		return true
+	// Guild petition flow (cluster signatures)
+	case CmsgPetitionShowSignatures, SmsgPetitionShowSignatures,
+		CmsgPetitionSign, SmsgPetitionSignResults,
+		CmsgOfferPetition, CmsgTurnInPetition, SmsgTurnInPetitionResults,
+		CmsgPetitionQuery, SmsgPetitionQueryResponse:
+		return true
+	// Guild bank
+	case CmsgGuildBankerActivate, CmsgGuildBankQueryTab, SmsgGuildBankList,
+		CmsgGuildBankSwapItems, CmsgGuildBankBuyTab,
+		CmsgGuildBankDepositMoney, CmsgGuildBankWithdrawMoney,
+		MsgGuildBankMoneyWithdrawn:
+		return true
 	default:
 		return false
 	}
@@ -139,8 +154,34 @@ var opcodeNames = map[uint16]string{
 	SmsgPowerUpdate:   "SMSG_POWER_UPDATE",
 	SmsgForceRunSpeedChange: "SMSG_FORCE_RUN_SPEED_CHANGE",
 	CmsgForceRunSpeedChangeAck: "CMSG_FORCE_RUN_SPEED_CHANGE_ACK",
-	CmsgSetSheathed:   "CMSG_SETSHEATHED",
-	SmsgAuraUpdate:    "SMSG_AURA_UPDATE",
-	SmsgAuraUpdateAll: "SMSG_AURA_UPDATE_ALL",
-	SmsgLevelupInfo:   "SMSG_LEVELUP_INFO",
+	SmsgItemPushResult:         "SMSG_ITEM_PUSH_RESULT",
+	CmsgPetitionBuy:            "CMSG_PETITION_BUY",
+	CmsgPetitionShowSignatures: "CMSG_PETITION_SHOW_SIGNATURES",
+	SmsgPetitionShowSignatures: "SMSG_PETITION_SHOW_SIGNATURES",
+	CmsgPetitionSign:           "CMSG_PETITION_SIGN",
+	SmsgPetitionSignResults:    "SMSG_PETITION_SIGN_RESULTS",
+	MsgPetitionDecline:         "MSG_PETITION_DECLINE",
+	CmsgOfferPetition:          "CMSG_OFFER_PETITION",
+	CmsgTurnInPetition:         "CMSG_TURN_IN_PETITION",
+	SmsgTurnInPetitionResults:  "SMSG_TURN_IN_PETITION_RESULTS",
+	CmsgPetitionQuery:          "CMSG_PETITION_QUERY",
+	SmsgPetitionQueryResponse:  "SMSG_PETITION_QUERY_RESPONSE",
+	MsgPetitionRename:          "MSG_PETITION_RENAME",
+	CmsgGuildBankerActivate:    "CMSG_GUILD_BANKER_ACTIVATE",
+	CmsgGuildBankQueryTab:      "CMSG_GUILD_BANK_QUERY_TAB",
+	SmsgGuildBankList:          "SMSG_GUILD_BANK_LIST",
+	CmsgGuildBankSwapItems:     "CMSG_GUILD_BANK_SWAP_ITEMS",
+	CmsgGuildBankBuyTab:        "CMSG_GUILD_BANK_BUY_TAB",
+	CmsgGuildBankUpdateTab:     "CMSG_GUILD_BANK_UPDATE_TAB",
+	CmsgGuildBankDepositMoney:  "CMSG_GUILD_BANK_DEPOSIT_MONEY",
+	CmsgGuildBankWithdrawMoney: "CMSG_GUILD_BANK_WITHDRAW_MONEY",
+	MsgGuildBankLogQuery:       "MSG_GUILD_BANK_LOG_QUERY",
+	MsgGuildPermissions:        "MSG_GUILD_PERMISSIONS",
+	MsgGuildBankMoneyWithdrawn: "MSG_GUILD_BANK_MONEY_WITHDRAWN",
+	MsgQueryGuildBankText:      "MSG_QUERY_GUILD_BANK_TEXT",
+	CmsgSetGuildBankText:       "CMSG_SET_GUILD_BANK_TEXT",
+	CmsgSetSheathed:            "CMSG_SETSHEATHED",
+	SmsgAuraUpdate:             "SMSG_AURA_UPDATE",
+	SmsgAuraUpdateAll:          "SMSG_AURA_UPDATE_ALL",
+	SmsgLevelupInfo:            "SMSG_LEVELUP_INFO",
 }

@@ -1,5 +1,10 @@
 package client
 
+import (
+	"fmt"
+	"time"
+)
+
 // SessionPhase mirrors AzerothCore WorldSession status gates that matter for bots.
 // Gameplay CMSG (move/cast/attack) is only valid in PhaseInWorld; far teleports
 // temporarily require WORLDPORT_ACK before movement is accepted again.
@@ -82,12 +87,119 @@ func (w *WorldClient) setPhase(to SessionPhase, reason string) {
 		return
 	}
 	w.phase = to
+	// Self near/far teleport completes when we return to InWorld from a transfer phase.
+	// Bump sequence so WaitForTeleportAfter can observe the packet-driven settle without sleeps.
+	if to == PhaseInWorld && (from == PhaseNearTeleport || from == PhaseFarTransfer) {
+		w.teleportSeq++
+	}
+	seq := w.teleportSeq
+	waiters := append([]chan SessionPhase(nil), w.phaseWaiters...)
 	w.phaseMu.Unlock()
 
 	w.log("session phase %s -> %s (%s)", from, to, reason)
 	if w.OnSessionPhase != nil {
 		w.OnSessionPhase(SessionPhaseChange{From: from, To: to, Reason: reason})
 	}
+	for _, ch := range waiters {
+		select {
+		case ch <- to:
+		default:
+		}
+	}
+	_ = seq // kept for readability next to teleportSeq bump
+}
+
+// TeleportSeq returns how many self near/far teleports have completed (packet-driven).
+// Snapshot before a teleport command, then WaitForTeleportAfter.
+func (w *WorldClient) TeleportSeq() uint64 {
+	w.phaseMu.RLock()
+	defer w.phaseMu.RUnlock()
+	return w.teleportSeq
+}
+
+// WaitForSessionPhase blocks until SessionPhase equals want, or timeout.
+// Driven by phase transitions (SMSG_AUTH_RESPONSE, LOGIN_VERIFY_WORLD, teleports, …).
+func (w *WorldClient) WaitForSessionPhase(want SessionPhase, timeout time.Duration) error {
+	if w.SessionPhase() == want {
+		return nil
+	}
+	ch := make(chan SessionPhase, 16)
+	w.phaseMu.Lock()
+	w.phaseWaiters = append(w.phaseWaiters, ch)
+	// Recheck under lock so we cannot miss a transition that happened after the first check.
+	if w.phase == want {
+		w.phaseMu.Unlock()
+		w.removePhaseWaiter(ch)
+		return nil
+	}
+	w.phaseMu.Unlock()
+	defer w.removePhaseWaiter(ch)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case p := <-ch:
+			if p == want {
+				return nil
+			}
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for session phase %s (have %s)", want, w.SessionPhase())
+		case <-w.stopChan:
+			return fmt.Errorf("client stopped while waiting for session phase %s", want)
+		}
+	}
+}
+
+// WaitForTeleportAfter waits until TeleportSeq advances past afterSeq (self tele complete).
+// Use after GM `.go` / far transfer; near-tele and NEW_WORLD both bump the sequence.
+func (w *WorldClient) WaitForTeleportAfter(afterSeq uint64, timeout time.Duration) error {
+	if w.TeleportSeq() > afterSeq {
+		return nil
+	}
+	// Teleport completion always lands in PhaseInWorld; also watch phase so a stalled
+	// tele does not hang past the session dying.
+	ch := make(chan SessionPhase, 16)
+	w.phaseMu.Lock()
+	w.phaseWaiters = append(w.phaseWaiters, ch)
+	if w.teleportSeq > afterSeq {
+		w.phaseMu.Unlock()
+		w.removePhaseWaiter(ch)
+		return nil
+	}
+	w.phaseMu.Unlock()
+	defer w.removePhaseWaiter(ch)
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		if w.TeleportSeq() > afterSeq {
+			return nil
+		}
+		select {
+		case <-ch:
+			if w.TeleportSeq() > afterSeq {
+				return nil
+			}
+		case <-timer.C:
+			return fmt.Errorf("timeout waiting for teleport after seq=%d (have seq=%d phase=%s)",
+				afterSeq, w.TeleportSeq(), w.SessionPhase())
+		case <-w.stopChan:
+			return fmt.Errorf("client stopped while waiting for teleport")
+		}
+	}
+}
+
+func (w *WorldClient) removePhaseWaiter(ch chan SessionPhase) {
+	w.phaseMu.Lock()
+	defer w.phaseMu.Unlock()
+	out := w.phaseWaiters[:0]
+	for _, wch := range w.phaseWaiters {
+		if wch != ch {
+			out = append(out, wch)
+		}
+	}
+	w.phaseWaiters = out
 }
 
 // requiresInWorldGameplay is true for opcodes AC will STATUS-drop outside in-world.

@@ -1,6 +1,9 @@
 package client
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSessionPhaseString(t *testing.T) {
 	if PhaseInWorld.String() != "in_world" {
@@ -65,5 +68,39 @@ func TestRequiresInWorldGameplay(t *testing.T) {
 	}
 	if requiresInWorldGameplay(CmsgCharEnum) {
 		t.Fatal("char enum should be allowed outside world")
+	}
+}
+
+func TestWaitForSessionPhase(t *testing.T) {
+	w := NewWorldClient("u", nil, func(string, ...interface{}) {})
+	done := make(chan error, 1)
+	go func() {
+		done <- w.WaitForSessionPhase(PhaseAuthed, 2*time.Second)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	w.setPhase(PhaseConnected, "c")
+	w.setPhase(PhaseAuthed, "a")
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitForTeleportAfter(t *testing.T) {
+	w := NewWorldClient("u", nil, func(string, ...interface{}) {})
+	w.setPhase(PhaseInWorld, "start")
+	before := w.TeleportSeq()
+	done := make(chan error, 1)
+	go func() {
+		done <- w.WaitForTeleportAfter(before, 2*time.Second)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	// Simulate near tele complete (handler path).
+	w.setPhase(PhaseNearTeleport, "tele")
+	w.setPhase(PhaseInWorld, "ack")
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if w.TeleportSeq() != before+1 {
+		t.Fatalf("seq=%d want %d", w.TeleportSeq(), before+1)
 	}
 }

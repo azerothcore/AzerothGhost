@@ -201,6 +201,21 @@ const (
 	// See AzerothCore SpellAuras.cpp AuraApplication::BuildUpdatePacket.
 	SmsgAuraUpdate    uint16 = 0x0496
 	SmsgAuraUpdateAll uint16 = 0x0495
+
+	// Guild / arena petitions (3.3.5a). Guild charter signatures are owned by
+	// ToCloud9 charserver; arena charters stay worldserver-local.
+	CmsgPetitionBuy            uint16 = 0x01BD
+	CmsgPetitionShowSignatures uint16 = 0x01BE
+	SmsgPetitionShowSignatures uint16 = 0x01BF
+	CmsgPetitionSign           uint16 = 0x01C0
+	SmsgPetitionSignResults    uint16 = 0x01C1
+	MsgPetitionDecline         uint16 = 0x01C2
+	CmsgOfferPetition          uint16 = 0x01C3
+	CmsgTurnInPetition         uint16 = 0x01C4
+	SmsgTurnInPetitionResults  uint16 = 0x01C5
+	CmsgPetitionQuery          uint16 = 0x01C6
+	SmsgPetitionQueryResponse  uint16 = 0x01C7
+	MsgPetitionRename          uint16 = 0x02C1
 )
 
 // Chat message types
@@ -671,6 +686,7 @@ type WorldClient struct {
 	moveMu sync.Mutex
 
 	charGUID                      uint64
+	charRace                      uint8 // 3.3.5a race id (for chat language / GM cmds)
 	timeSyncCounter               uint32
 	posX, posY, posZ, orientation float32
 	mapID                         uint32
@@ -730,6 +746,8 @@ type WorldClient struct {
 	timeSyncResponses    uint64
 	worldportAcksSent    uint64
 	teleportAcksSent     uint64
+	teleportSeq          uint64 // increments on each completed self near/far teleport
+	phaseWaiters         []chan SessionPhase
 
 	// Callbacks
 	logFunc            func(format string, args ...interface{})
@@ -1943,13 +1961,44 @@ func (w *WorldClient) CastSpell(spellID uint32, targetGUID uint64) error {
 	return w.sendPacket(CmsgCastSpell, buf.Bytes())
 }
 
-// CastSpellAtPosition sends a spell targeted at a position
+// AutoEquipItem sends CMSG_AUTOEQUIP_ITEM for a bag/slot inventory location.
+// bag=255 is the backpack; slots 23..38 are backpack item slots on 3.3.5a.
+func (w *WorldClient) AutoEquipItem(bag, slot uint8) error {
+	buf := new(bytes.Buffer)
+	buf.WriteByte(bag)
+	buf.WriteByte(slot)
+	return w.sendPacket(CmsgAutoequipItem, buf.Bytes())
+}
+
+// SelfHasAura reports whether the player currently has spellID as an active aura
+// (from SMSG_AURA_UPDATE* tracking on the self WorldObject).
+func (w *WorldClient) SelfHasAura(spellID uint32) bool {
+	obj := w.GetObject(w.CharGUID())
+	if obj == nil {
+		return false
+	}
+	return obj.HasAura(spellID)
+}
+
+// SelfAuras returns a snapshot of active aura spell IDs on the player.
+func (w *WorldClient) SelfAuras() []uint32 {
+	obj := w.GetObject(w.CharGUID())
+	if obj == nil {
+		return nil
+	}
+	return obj.GetActiveAuras()
+}
+
+// CastSpellAtPosition sends a spell targeted at a world position (ground-targeted AoE).
+// 3.3.5a target flags: TARGET_FLAG_DEST_LOCATION = 0x40 (0x20 is SOURCE_LOCATION).
 func (w *WorldClient) CastSpellAtPosition(spellID uint32, x, y, z float32) error {
 	buf := new(bytes.Buffer)
-	buf.WriteByte(0)
+	buf.WriteByte(0) // castCount
 	binary.Write(buf, binary.LittleEndian, spellID)
+	buf.WriteByte(0)                                  // castFlags
+	binary.Write(buf, binary.LittleEndian, uint32(0x40)) // TARGET_FLAG_DEST_LOCATION
+	// Packed transport GUID (0 = none) then xyz.
 	buf.WriteByte(0)
-	binary.Write(buf, binary.LittleEndian, uint32(0x0020)) // TARGET_FLAG_DEST_LOCATION
 	binary.Write(buf, binary.LittleEndian, x)
 	binary.Write(buf, binary.LittleEndian, y)
 	binary.Write(buf, binary.LittleEndian, z)
@@ -1982,13 +2031,37 @@ func (w *WorldClient) LootRelease(guid uint64) error {
 	return w.sendPacket(CmsgLootRelease, buf.Bytes())
 }
 
-// SendGMCommand sends a chat message that is a GM command (e.g., ".gm on")
+// nativeChatLang returns the racial say language for GM commands.
+// AC rejects LANG_UNIVERSAL on CHAT_MSG_SAY as a cheat, and drops messages
+// in languages the character has not learned (Horde cannot speak Common).
+func (w *WorldClient) nativeChatLang() uint32 {
+	switch w.charRace {
+	case 2, 5, 6, 8, 10: // Orc, Undead, Tauren, Troll, BloodElf
+		return LangOrcish
+	default: // Alliance races (Human, Dwarf, NightElf, Gnome, Draenei, …)
+		return LangCommon
+	}
+}
+
+// SetCharRace records the character race (call at create/login). Used for chat language.
+func (w *WorldClient) SetCharRace(race uint8) {
+	w.charRace = race
+}
+
+// CharRace returns the race set via SetCharRace / character create.
+func (w *WorldClient) CharRace() uint8 {
+	return w.charRace
+}
+
+// SendGMCommand sends a chat message that is a GM command (e.g., ".gm on").
+// Language is the character's native racial language — see nativeChatLang.
 func (w *WorldClient) SendGMCommand(command string) error {
 	// GM commands are typically sent as a chat message starting with '.' when the
 	// account has sufficient GM level (or via account_access in the DB). The server
 	// intercepts it before normal chat processing for authorized users.
-	w.log("Sending GM command: %s (opcode=0x%04X encrypted=%v)", command, CmsgMessageChat, w.encrypted)
-	err := w.SendChatMessage(ChatMsgSay, LangCommon, command)
+	lang := w.nativeChatLang()
+	w.log("Sending GM command: %s (opcode=0x%04X encrypted=%v lang=%d)", command, CmsgMessageChat, w.encrypted, lang)
+	err := w.SendChatMessage(ChatMsgSay, lang, command)
 	if err != nil {
 		w.log("GM command send error: %v", err)
 	}
@@ -2011,8 +2084,8 @@ func (w *WorldClient) SendGuildCommand(command string) error {
 // Preferred implementation for tests uses a GM command (requires GM rights).
 // Falls back or can be extended to use CMSG_WORLD_TELEPORT + ack handling.
 func (w *WorldClient) Teleport(mapID uint32, x, y, z, o float32) error {
-	// Use .go for coordinate teleport (supported in most 3.3.5a GM command sets).
-	cmd := fmt.Sprintf(".go %.2f %.2f %.2f %d", x, y, z, mapID)
+	// AC: .go xyz <x> <y> <z> [map]
+	cmd := fmt.Sprintf(".go xyz %.2f %.2f %.2f %d", x, y, z, mapID)
 	return w.SendGMCommand(cmd)
 }
 
@@ -2264,6 +2337,134 @@ func (w *WorldClient) GetNearbyUnits(maxDist float32) []*WorldObject {
 		result[i] = obj.Clone()
 	}
 	return result
+}
+
+// FindUnitByEntry returns the GUID of a tracked unit (NPC) with the given
+// template entry. maxDist 0 disables the distance filter (still prefers nearer
+// matches when positions are known). Units without a known position are still
+// considered — CREATE can deliver entry before a usable movement block.
+func (w *WorldClient) FindUnitByEntry(entry uint32, maxDist float32) uint64 {
+	w.objectsMu.RLock()
+	defer w.objectsMu.RUnlock()
+	var best uint64
+	var bestDist float32 = -1
+	for _, obj := range w.objects {
+		if obj.TypeID != ObjectTypeUnit {
+			high := uint16(obj.GUID >> 48)
+			if high != 0xF130 && high != 0xF150 { // Unit / Vehicle
+				continue
+			}
+		}
+		objEntry := obj.Entry
+		if objEntry == 0 {
+			objEntry = uint32((obj.GUID >> 24) & 0xFFFFFF)
+		}
+		if objEntry != entry {
+			continue
+		}
+		if maxDist > 0 && obj.HasKnownPosition() {
+			d := obj.DistanceTo(w.posX, w.posY, w.posZ)
+			if d > maxDist {
+				continue
+			}
+			if best == 0 || d < bestDist {
+				best = obj.GUID
+				bestDist = d
+			}
+			continue
+		}
+		if best == 0 {
+			best = obj.GUID
+		}
+	}
+	return best
+}
+
+// FindGameObjectByEntry returns the GUID of a tracked GameObject with the given
+// template entry within maxDist yards of the player (0 = unlimited distance).
+// Entry is matched via OBJECT_FIELD_ENTRY when known, else the 24-bit entry field
+// packed into map-specific ObjectGuids. Returns 0 if none found.
+func (w *WorldClient) FindGameObjectByEntry(entry uint32, maxDist float32) uint64 {
+	w.objectsMu.RLock()
+	defer w.objectsMu.RUnlock()
+	var best uint64
+	var bestDist float32 = -1
+	for _, obj := range w.objects {
+		high := uint16(obj.GUID >> 48)
+		isGO := obj.TypeID == ObjectTypeGameObj || high == 0xF110 || high == 0xF111
+		if !isGO {
+			continue
+		}
+		objEntry := obj.Entry
+		if objEntry == 0 {
+			objEntry = uint32((obj.GUID >> 24) & 0xFFFFFF)
+		}
+		if objEntry != entry {
+			continue
+		}
+		if maxDist > 0 && obj.HasKnownPosition() {
+			d := obj.DistanceTo(w.posX, w.posY, w.posZ)
+			if d > maxDist {
+				continue
+			}
+			if best == 0 || d < bestDist {
+				best = obj.GUID
+				bestDist = d
+			}
+			continue
+		}
+		// No position yet: accept first match without distance filter.
+		if best == 0 {
+			best = obj.GUID
+		}
+	}
+	return best
+}
+
+// ObjectTrackStats returns counts by TypeID plus how many objects carry HighGuid GameObject.
+func (w *WorldClient) ObjectTrackStats() (byType map[uint8]int, gameObjectHigh int, total int) {
+	w.objectsMu.RLock()
+	defer w.objectsMu.RUnlock()
+	byType = make(map[uint8]int)
+	for _, obj := range w.objects {
+		total++
+		byType[obj.TypeID]++
+		high := uint16(obj.GUID >> 48)
+		if high == 0xF110 || high == 0xF111 || obj.TypeID == ObjectTypeGameObj {
+			gameObjectHigh++
+		}
+	}
+	return byType, gameObjectHigh, total
+}
+
+// ListGameObjectEntries returns up to limit unique entry samples from tracked GOs (debug).
+func (w *WorldClient) ListGameObjectEntries(limit int) []uint32 {
+	w.objectsMu.RLock()
+	defer w.objectsMu.RUnlock()
+	seen := make(map[uint32]struct{})
+	out := make([]uint32, 0, limit)
+	for _, obj := range w.objects {
+		high := uint16(obj.GUID >> 48)
+		if obj.TypeID != ObjectTypeGameObj && high != 0xF110 && high != 0xF111 {
+			continue
+		}
+		e := obj.Entry
+		if e == 0 {
+			e = uint32((obj.GUID >> 24) & 0xFFFFFF)
+		}
+		if e == 0 {
+			continue
+		}
+		if _, ok := seen[e]; ok {
+			continue
+		}
+		seen[e] = struct{}{}
+		out = append(out, e)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 // GetNearbyPlayers returns all tracked players within maxDist yards.
@@ -2779,73 +2980,96 @@ func (w *WorldClient) handleClearCooldown(data []byte) {
 	}
 }
 
+// 3.3.5a / AzerothCore AuraFlags (SpellAuraDefines.h).
+const (
+	auraFlagEffIndex0          uint8 = 0x01
+	auraFlagEffIndex1          uint8 = 0x02
+	auraFlagEffIndex2          uint8 = 0x04
+	auraFlagCaster             uint8 = 0x08 // set when caster == target (self-cast)
+	auraFlagPositive           uint8 = 0x10
+	auraFlagDuration           uint8 = 0x20
+	auraFlagAnyEffectAmountSent uint8 = 0x40
+	auraFlagNegative           uint8 = 0x80
+)
+
+// parseAuraSlotUpdate reads one aura slot from an SMSG_AURA_UPDATE* stream.
+// Layout matches AuraApplication::BuildUpdatePacket (AzerothCore):
+//
+//	uint8  slot
+//	uint32 spellId          // 0 = remove slot and stop this entry
+//	[if spellId != 0]:
+//	  uint8  flags
+//	  uint8  casterLevel
+//	  uint8  stackOrCharges
+//	  [if !(flags & AFLAG_CASTER)] packed caster GUID
+//	  [if flags & AFLAG_DURATION]  uint32 maxDuration, uint32 duration
+//	  [if flags & AFLAG_ANY_EFFECT_AMOUNT_SENT] int32 amount per effect bit
+func parseAuraSlotUpdate(r *bytes.Reader) (slot uint8, spellID uint32, ok bool) {
+	if err := binary.Read(r, binary.LittleEndian, &slot); err != nil {
+		return 0, 0, false
+	}
+	if err := binary.Read(r, binary.LittleEndian, &spellID); err != nil {
+		return 0, 0, false
+	}
+	if spellID == 0 {
+		// Remove: packet ends after spellId 0 (no flags/header).
+		return slot, 0, true
+	}
+	var flags, casterLevel, stackOrCharges uint8
+	if err := binary.Read(r, binary.LittleEndian, &flags); err != nil {
+		return 0, 0, false
+	}
+	if err := binary.Read(r, binary.LittleEndian, &casterLevel); err != nil {
+		return 0, 0, false
+	}
+	if err := binary.Read(r, binary.LittleEndian, &stackOrCharges); err != nil {
+		return 0, 0, false
+	}
+	// Caster GUID is omitted only when AFLAG_CASTER is set (self-cast).
+	if flags&auraFlagCaster == 0 {
+		if _, err := readPackedGUID(r); err != nil {
+			return 0, 0, false
+		}
+	}
+	if flags&auraFlagDuration != 0 {
+		var maxDur, dur uint32
+		if err := binary.Read(r, binary.LittleEndian, &maxDur); err != nil {
+			return 0, 0, false
+		}
+		if err := binary.Read(r, binary.LittleEndian, &dur); err != nil {
+			return 0, 0, false
+		}
+	}
+	// Effect amounts (int32 each) when AFLAG_ANY_EFFECT_AMOUNT_SENT + effect index bits.
+	if flags&auraFlagAnyEffectAmountSent != 0 {
+		for _, bit := range []uint8{auraFlagEffIndex0, auraFlagEffIndex1, auraFlagEffIndex2} {
+			if flags&bit == 0 {
+				continue
+			}
+			var amount int32
+			if err := binary.Read(r, binary.LittleEndian, &amount); err != nil {
+				return 0, 0, false
+			}
+		}
+	}
+	return slot, spellID, true
+}
+
 // handleAuraUpdate handles SMSG_AURA_UPDATE (incremental single-target aura slot updates).
-// Packet (per AC): packed target GUID, then repeated:
-//   uint8 slot
-//   uint32 spellId (or 0 to remove/clear the slot)
-//   [if spellId != 0]:
-//     uint8 flags
-//     uint8 casterLevel
-//     uint8 stackOrCharges
-//     [if not self-cast flag] packed caster GUID
-//     [if has duration] uint32 maxDuration, uint32 duration
 func (w *WorldClient) handleAuraUpdate(data []byte) {
 	r := bytes.NewReader(data)
 	targetGUID, err := readPackedGUID(r)
 	if err != nil || targetGUID == 0 {
 		return
 	}
-	w.objectsMu.RLock()
-	obj := w.objects[targetGUID]
-	w.objectsMu.RUnlock()
-	if obj == nil {
-		// We may learn about auras on objects we don't fully track yet; ignore or create stub?
-		// For testkit we primarily care about tracked objects; create a minimal stub.
-		obj = w.getOrCreateObject(targetGUID)
-	}
+	obj := w.getOrCreateObject(targetGUID)
 
 	for {
-		var slot uint8
-		if err := binary.Read(r, binary.LittleEndian, &slot); err != nil {
+		slot, spellID, ok := parseAuraSlotUpdate(r)
+		if !ok {
 			break
 		}
-		var spellID uint32
-		if err := binary.Read(r, binary.LittleEndian, &spellID); err != nil {
-			break
-		}
-
-		// Read the fixed aura header (we don't currently use flags/level/stack for HasAura).
-		var flags, casterLevel, stackOrCharges uint8
-		if err := binary.Read(r, binary.LittleEndian, &flags); err != nil {
-			break
-		}
-		if err := binary.Read(r, binary.LittleEndian, &casterLevel); err != nil {
-			break
-		}
-		if err := binary.Read(r, binary.LittleEndian, &stackOrCharges); err != nil {
-			break
-		}
-
-		// If not caster flag (bit 2 in typical AC flags?), a packed caster GUID follows.
-		// We simply skip it for now.
-		const AFLAG_NOT_CASTER = 0x02 // conservative; actual mask per AC may vary
-		if flags&AFLAG_NOT_CASTER != 0 {
-			if _, err := readPackedGUID(r); err != nil {
-				break
-			}
-		}
-
-		// Duration block may be present depending on flags. We attempt a non-blocking peek
-		// by trying to read; on short packet we just stop. This is best-effort.
-		// Real impl would inspect flags for DURATION etc. For HasAura we only need spellID.
-		var maxDur, dur uint32
-		_ = binary.Read(r, binary.LittleEndian, &maxDur)
-		_ = binary.Read(r, binary.LittleEndian, &dur)
-
-		// Use slot-aware update so that spellID==0 correctly clears the previous occupant.
 		obj.setAuraForSlot(slot, spellID)
-
-		// Notify observers (testkit can poll, or we could add OnAura).
 		if w.OnObjectUpdate != nil {
 			w.OnObjectUpdate(targetGUID, obj.Clone())
 		}
@@ -2853,49 +3077,23 @@ func (w *WorldClient) handleAuraUpdate(data []byte) {
 }
 
 // handleAuraUpdateAll handles SMSG_AURA_UPDATE_ALL (full aura list for a target).
-// Similar structure repeated until end of packet or a terminator slot.
 func (w *WorldClient) handleAuraUpdateAll(data []byte) {
 	r := bytes.NewReader(data)
 	targetGUID, err := readPackedGUID(r)
 	if err != nil || targetGUID == 0 {
 		return
 	}
-	w.objectsMu.RLock()
-	obj := w.objects[targetGUID]
-	w.objectsMu.RUnlock()
-	if obj == nil {
-		obj = w.getOrCreateObject(targetGUID)
-	}
-	// Clear previous state for a full snapshot.
+	obj := w.getOrCreateObject(targetGUID)
 	obj.clearAuras()
 
 	for {
-		var slot uint8
-		if err := binary.Read(r, binary.LittleEndian, &slot); err != nil {
+		slot, spellID, ok := parseAuraSlotUpdate(r)
+		if !ok {
 			break
 		}
-		var spellID uint32
-		if err := binary.Read(r, binary.LittleEndian, &spellID); err != nil {
-			break
+		if spellID != 0 {
+			obj.setAuraForSlot(slot, spellID)
 		}
-
-		var flags, casterLevel, stackOrCharges uint8
-		_ = binary.Read(r, binary.LittleEndian, &flags)
-		_ = binary.Read(r, binary.LittleEndian, &casterLevel)
-		_ = binary.Read(r, binary.LittleEndian, &stackOrCharges)
-
-		const AFLAG_NOT_CASTER = 0x02
-		if flags&AFLAG_NOT_CASTER != 0 {
-			if _, err := readPackedGUID(r); err != nil {
-				break
-			}
-		}
-		var maxDur, dur uint32
-		_ = binary.Read(r, binary.LittleEndian, &maxDur)
-		_ = binary.Read(r, binary.LittleEndian, &dur)
-
-		// For full snapshot we can still use the slot map for future remove fidelity.
-		obj.setAuraForSlot(slot, spellID)
 	}
 
 	if w.OnObjectUpdate != nil {
@@ -3110,35 +3308,49 @@ func (w *WorldClient) handleUpdateObject(data []byte) {
 				return
 			}
 
-			if objTypeID == ObjectTypePlayer && guid != w.charGUID {
-				// For other players (the main source of packet volume with 500 in zone),
-				// skip parsing entirely. We only need to consume bytes to stay in sync.
-				// We still track self + NPCs/units for AI targeting.
-				w.skipMovementUpdate(r)
-				w.skipValuesUpdate(r)
-			} else {
-				obj := w.getOrCreateObject(guid)
-				// Preserve a fresher MONSTER_MOVE pose if create is delayed in the stream
-				// (move/aura stubs often exist before CREATE_OBJECT is parsed).
-				preX, preY, preZ := obj.PosX, obj.PosY, obj.PosZ
-				preLast := obj.LastPosUpdate
-				hadPrePos := obj.HasKnownPosition()
-				preMoving := obj.IsMoving
-				preDestX, preDestY, preDestZ := obj.DestX, obj.DestY, obj.DestZ
-				preStartX, preStartY, preStartZ := obj.StartX, obj.StartY, obj.StartZ
-				preMoveStart, preMoveDur := obj.MoveStartTime, obj.MoveDuration
+			// Always fully parse CREATE_OBJECT (including other players).
+			// Skipping other players via skipMovementUpdate previously desynced the
+			// SMSG_UPDATE_OBJECT stream whenever flags diverged from the skip path
+			// (e.g. UPDATEFLAG_TRANSPORT as packed GUID instead of uint32), which
+			// dropped subsequent NPC creates — e.g. Stormwind tabard designer —
+			// from the object cache with no server resend.
+			obj := w.getOrCreateObject(guid)
+			// Preserve a fresher MONSTER_MOVE pose if create is delayed in the stream
+			// (move/aura stubs often exist before CREATE_OBJECT is parsed).
+			preX, preY, preZ := obj.PosX, obj.PosY, obj.PosZ
+			preLast := obj.LastPosUpdate
+			hadPrePos := obj.HasKnownPosition()
+			preMoving := obj.IsMoving
+			preDestX, preDestY, preDestZ := obj.DestX, obj.DestY, obj.DestZ
+			preStartX, preStartY, preStartZ := obj.StartX, obj.StartY, obj.StartZ
+			preMoveStart, preMoveDur := obj.MoveStartTime, obj.MoveDuration
 
-				obj.TypeID = objTypeID
-				obj.IsPlayer = objTypeID == ObjectTypePlayer
-				// Drop prior spline so GUID reuse never keeps an old Dest.
-				obj.resetMovementInterp()
+			obj.TypeID = objTypeID
+			obj.IsPlayer = objTypeID == ObjectTypePlayer
+			// Drop prior spline so GUID reuse never keeps an old Dest.
+			obj.resetMovementInterp()
 
-				w.readMovementUpdate(r, obj)
-				w.readValuesUpdate(r, guid)
+			w.readMovementUpdate(r, obj)
+			w.readValuesUpdate(r, guid)
 
-				if hadPrePos {
-					if !obj.HasKnownPosition() {
-						// Create had no usable position block — keep pre-create pose.
+			if hadPrePos {
+				if !obj.HasKnownPosition() {
+					// Create had no usable position block — keep pre-create pose.
+					obj.PosX, obj.PosY, obj.PosZ = preX, preY, preZ
+					obj.LastPosUpdate = preLast
+					if preMoving {
+						obj.IsMoving = true
+						obj.DestX, obj.DestY, obj.DestZ = preDestX, preDestY, preDestZ
+						obj.StartX, obj.StartY, obj.StartZ = preStartX, preStartY, preStartZ
+						obj.MoveStartTime, obj.MoveDuration = preMoveStart, preMoveDur
+					}
+				} else if !obj.IsMoving && !preLast.IsZero() && time.Since(preLast) < 2*time.Second {
+					// Stationary delayed CREATE often carries an older spawn/home pose
+					// while MONSTER_MOVE already put the unit on a live path.
+					ddx := obj.PosX - preX
+					ddy := obj.PosY - preY
+					ddz := obj.PosZ - preZ
+					if ddx*ddx+ddy*ddy+ddz*ddz > 16 { // >4 yards
 						obj.PosX, obj.PosY, obj.PosZ = preX, preY, preZ
 						obj.LastPosUpdate = preLast
 						if preMoving {
@@ -3146,22 +3358,6 @@ func (w *WorldClient) handleUpdateObject(data []byte) {
 							obj.DestX, obj.DestY, obj.DestZ = preDestX, preDestY, preDestZ
 							obj.StartX, obj.StartY, obj.StartZ = preStartX, preStartY, preStartZ
 							obj.MoveStartTime, obj.MoveDuration = preMoveStart, preMoveDur
-						}
-					} else if !obj.IsMoving && !preLast.IsZero() && time.Since(preLast) < 2*time.Second {
-						// Stationary delayed CREATE often carries an older spawn/home pose
-						// while MONSTER_MOVE already put the unit on a live path.
-						ddx := obj.PosX - preX
-						ddy := obj.PosY - preY
-						ddz := obj.PosZ - preZ
-						if ddx*ddx+ddy*ddy+ddz*ddz > 16 { // >4 yards
-							obj.PosX, obj.PosY, obj.PosZ = preX, preY, preZ
-							obj.LastPosUpdate = preLast
-							if preMoving {
-								obj.IsMoving = true
-								obj.DestX, obj.DestY, obj.DestZ = preDestX, preDestY, preDestZ
-								obj.StartX, obj.StartY, obj.StartZ = preStartX, preStartY, preStartZ
-								obj.MoveStartTime, obj.MoveDuration = preMoveStart, preMoveDur
-							}
 						}
 					}
 				}
@@ -3466,6 +3662,10 @@ func (w *WorldClient) parseCreateSplineData(r *bytes.Reader, obj *WorldObject) {
 
 // skipMovementUpdate consumes a movement block without allocating or storing anything.
 // Used for other players/objects when we only need to keep the protocol stream in sync.
+//
+// MUST stay byte-identical to readMovementUpdate's consumption path. Any mismatch
+// desynchronizes the rest of SMSG_UPDATE_OBJECT (later CREATE_OBJECT blocks for
+// NPCs are misparsed and never enter the object cache).
 func (w *WorldClient) skipMovementUpdate(r *bytes.Reader) {
 	var updateFlags uint16
 	if err := binary.Read(r, binary.LittleEndian, &updateFlags); err != nil {
@@ -3473,66 +3673,88 @@ func (w *WorldClient) skipMovementUpdate(r *bytes.Reader) {
 	}
 
 	if updateFlags&0x20 != 0 {
-		// LIVING
+		// LIVING — same layout as readMovementUpdate
 		var moveFlags uint32
 		binary.Read(r, binary.LittleEndian, &moveFlags)
 		var moveFlags2 uint16
 		binary.Read(r, binary.LittleEndian, &moveFlags2)
 		var timestamp uint32
 		binary.Read(r, binary.LittleEndian, &timestamp)
+		_ = timestamp
 
 		r.Seek(16, io.SeekCurrent) // x y z o
 
+		// MOVEMENTFLAG_ONTRANSPORT = 0x00000200
 		if moveFlags&0x00000200 != 0 {
 			_, _ = readPackedGUID(r)
-			r.Seek(21, io.SeekCurrent)
+			r.Seek(21, io.SeekCurrent) // trans offsets + time + seat
+			// MOVEMENTFLAG2_INTERPOLATED_MOVEMENT = 0x0400
 			if moveFlags2&0x0400 != 0 {
 				var extra uint32
 				binary.Read(r, binary.LittleEndian, &extra)
 			}
 		}
+		// SWIMMING | FLYING | ALWAYS_ALLOW_PITCHING
 		if moveFlags&(0x00200000|0x02000000) != 0 || moveFlags2&0x0020 != 0 {
 			var pitch float32
 			binary.Read(r, binary.LittleEndian, &pitch)
 		}
 		var fallTime uint32
 		binary.Read(r, binary.LittleEndian, &fallTime)
+		_ = fallTime
+		// MOVEMENTFLAG_FALLING = 0x00001000
 		if moveFlags&0x00001000 != 0 {
 			r.Seek(16, io.SeekCurrent)
 		}
+		// MOVEMENTFLAG_SPLINE_ELEVATION = 0x04000000
 		if moveFlags&0x04000000 != 0 {
 			var se float32
 			binary.Read(r, binary.LittleEndian, &se)
 		}
-		// 9 speeds
+		// 9 movement speeds
 		r.Seek(36, io.SeekCurrent)
+		// MOVEMENTFLAG_SPLINE_ENABLED = 0x08000000
 		if moveFlags&0x08000000 != 0 {
 			w.skipSplineData(r)
 		}
 	} else if updateFlags&0x0100 != 0 {
 		// UPDATEFLAG_POSITION
 		_, _ = readPackedGUID(r)
-		// x y z tx ty tz o facing (8 floats)
-		r.Seek(32, io.SeekCurrent)
+		r.Seek(32, io.SeekCurrent) // x y z tx ty tz o facing
 	} else if updateFlags&0x0040 != 0 {
-		// STATIONARY_POSITION
-		r.Seek(16, io.SeekCurrent)
+		// UPDATEFLAG_STATIONARY_POSITION
+		r.Seek(16, io.SeekCurrent) // x y z o
 	}
 
+	// UPDATEFLAG_UNKNOWN = 0x0008
 	if updateFlags&0x0008 != 0 {
 		var unk uint32
 		binary.Read(r, binary.LittleEndian, &unk)
 	}
+	// UPDATEFLAG_LOWGUID = 0x0010
 	if updateFlags&0x0010 != 0 {
 		var lg uint32
 		binary.Read(r, binary.LittleEndian, &lg)
 	}
+	// UPDATEFLAG_HAS_TARGET = 0x0004
 	if updateFlags&0x0004 != 0 {
 		_, _ = readPackedGUID(r)
 	}
+	// UPDATEFLAG_TRANSPORT = 0x0002 — uint32 transport time, NOT a packed GUID
+	// (bug: previously readPackedGUID here desynced the stream for every other-player
+	// CREATE that carried this flag, dropping subsequent NPC creates from the cache).
 	if updateFlags&0x0002 != 0 {
-		_, _ = readPackedGUID(r)
+		var transportTime uint32
+		binary.Read(r, binary.LittleEndian, &transportTime)
 	}
+	// UPDATEFLAG_VEHICLE = 0x0080 — was missing entirely from skip path
+	if updateFlags&0x0080 != 0 {
+		var vehicleID uint32
+		binary.Read(r, binary.LittleEndian, &vehicleID)
+		var vehicleOrient float32
+		binary.Read(r, binary.LittleEndian, &vehicleOrient)
+	}
+	// UPDATEFLAG_ROTATION = 0x0200
 	if updateFlags&0x0200 != 0 {
 		var rot int64
 		binary.Read(r, binary.LittleEndian, &rot)
@@ -4058,6 +4280,12 @@ func (w *WorldClient) handleNewWorld(data []byte) {
 
 // handleMoveTeleportAck handles legacy/misrouted MSG_MOVE_TELEPORT_ACK as SMSG
 // (kept for compatibility with older packet paths that mirrored the opcode).
+//
+// Important: do NOT wipe the object cache here. Worldserver often sends
+// SMSG_UPDATE_OBJECT creates for the destination in the same burst as the near-tele
+// opcode (or immediately after). Clearing the map drops those creates and the
+// server will not resend them — leaving the bot "blind" until another tele.
+// Far map changes still clear in handleNewWorld. Near tele relies on OOR + creates.
 func (w *WorldClient) handleMoveTeleportAck(data []byte) {
 	if len(data) < 10 {
 		return
@@ -4090,9 +4318,8 @@ func (w *WorldClient) handleMoveTeleportAck(data []byte) {
 	w.posZ = newZ
 	w.orientation = newO
 
-	w.objectsMu.Lock()
-	w.objects = make(map[uint64]*WorldObject)
-	w.objectsMu.Unlock()
+	// Drop only far leftovers from the previous area (not a full wipe).
+	w.pruneObjectsBeyond(newX, newY, newZ, 150)
 
 	ackBuf := new(bytes.Buffer)
 	writePackedGUID(ackBuf, w.charGUID)
@@ -4104,6 +4331,28 @@ func (w *WorldClient) handleMoveTeleportAck(data []byte) {
 	w.phaseMu.Unlock()
 	w.setPhase(PhaseInWorld, "MSG_MOVE_TELEPORT_ACK")
 	_ = w.SendHeartbeat()
+}
+
+// pruneObjectsBeyond removes tracked objects farther than maxDist from (x,y,z).
+// Objects without a known position are kept (entry-only creates after tele).
+func (w *WorldClient) pruneObjectsBeyond(x, y, z, maxDist float32) {
+	maxDistSq := maxDist * maxDist
+	w.objectsMu.Lock()
+	defer w.objectsMu.Unlock()
+	for guid, obj := range w.objects {
+		if guid == w.charGUID {
+			continue
+		}
+		if !obj.HasKnownPosition() {
+			continue
+		}
+		dx := obj.PosX - x
+		dy := obj.PosY - y
+		dz := obj.PosZ - z
+		if dx*dx+dy*dy+dz*dz > maxDistSq {
+			delete(w.objects, guid)
+		}
+	}
 }
 
 func (w *WorldClient) getOrCreateObject(guid uint64) *WorldObject {
