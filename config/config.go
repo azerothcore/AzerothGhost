@@ -11,7 +11,7 @@ import (
 
 // CLIConfig holds the merged configuration for azghost CLI, node, orchestrator and scenario modes.
 type CLIConfig struct {
-	Profile  string `yaml:"profile"`
+	Profile    string `yaml:"profile"`
 	ConfigFile string `yaml:"-"`
 
 	// Connection
@@ -20,11 +20,11 @@ type CLIConfig struct {
 	AuthServer string `yaml:"auth_server" json:"auth_server"`
 
 	// Character / play
-	CharName  string `yaml:"char_name" json:"character_name"`
-	RealmIndex int   `yaml:"realm_index" json:"realm_index"`
-	Race      int    `yaml:"race" json:"race"`
-	Class     int    `yaml:"class" json:"class"`
-	Gender    uint8  `yaml:"gender" json:"gender"`
+	CharName   string `yaml:"char_name" json:"character_name"`
+	RealmIndex int    `yaml:"realm_index" json:"realm_index"`
+	Race       int    `yaml:"race" json:"race"`
+	Class      int    `yaml:"class" json:"class"`
+	Gender     uint8  `yaml:"gender" json:"gender"`
 
 	// Behavior
 	BotMode     string `yaml:"bot_mode" json:"mode"`
@@ -52,17 +52,17 @@ type CLIConfig struct {
 	Listen string `yaml:"listen" json:"listen"`
 
 	// Orchestrator / scenario
-	NumBots            int    `yaml:"num_bots" json:"num_bots"`
-	Nodes              string `yaml:"nodes" json:"nodes"`
-	AccountPrefix      string `yaml:"account_prefix" json:"account_prefix"`
-	AccountPassword    string `yaml:"account_password" json:"account_password"`
-	DBDSN              string        `yaml:"db_dsn" json:"db_dsn"`
-	Duration           time.Duration `yaml:"duration"`
-	SpawnRateLimit     int           `yaml:"spawn_rate_limit"`
-	SpawnRateInterval  time.Duration `yaml:"spawn_rate_interval"`
+	NumBots           int           `yaml:"num_bots" json:"num_bots"`
+	Nodes             string        `yaml:"nodes" json:"nodes"`
+	AccountPrefix     string        `yaml:"account_prefix" json:"account_prefix"`
+	AccountPassword   string        `yaml:"account_password" json:"account_password"`
+	DBDSN             string        `yaml:"db_dsn" json:"db_dsn"`
+	Duration          time.Duration `yaml:"duration"`
+	SpawnRateLimit    int           `yaml:"spawn_rate_limit"`
+	SpawnRateInterval time.Duration `yaml:"spawn_rate_interval"`
 
 	// Internal
-	AuthDBDSN      string `yaml:"auth_db_dsn"`
+	AuthDBDSN       string `yaml:"auth_db_dsn"`
 	CharactersDBDSN string `yaml:"characters_db_dsn"`
 }
 
@@ -257,4 +257,3 @@ func loadYAML(path string, out *CLIConfig) error {
 	}
 	return nil
 }
-

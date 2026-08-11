@@ -157,7 +157,7 @@ func TestInterpolatedPosition_DoesNotMutateAndAdvances(t *testing.T) {
 		PosX: 0, PosY: 0, PosZ: 0,
 		StartX: 0, StartY: 0, StartZ: 0,
 		DestX: 100, DestY: 0, DestZ: 0,
-		IsMoving: true,
+		IsMoving:      true,
 		MoveStartTime: time.Now().Add(-500 * time.Millisecond),
 		MoveDuration:  time.Second,
 	}
@@ -186,7 +186,7 @@ func TestClone_UsesInterpolatedPose(t *testing.T) {
 		PosX: 0, PosY: 0, PosZ: 0,
 		StartX: 0, StartY: 0, StartZ: 0,
 		DestX: 100, DestY: 0, DestZ: 0,
-		IsMoving: true,
+		IsMoving:      true,
 		MoveStartTime: time.Now().Add(-500 * time.Millisecond),
 		MoveDuration:  time.Second,
 		LastPosUpdate: time.Now(),

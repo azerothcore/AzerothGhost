@@ -27,12 +27,12 @@ const GuildBankSlotAuto uint8 = 0xFF
 
 // GuildBankList is a parsed SMSG_GUILD_BANK_LIST (full or partial).
 type GuildBankList struct {
-	Money       uint64
-	Tab         uint8
-	Remaining   int32
-	FullUpdate  bool
-	TabInfos    []GuildBankTabInfo // only when FullUpdate && Tab==0
-	Items       []GuildBankListItem
+	Money      uint64
+	Tab        uint8
+	Remaining  int32
+	FullUpdate bool
+	TabInfos   []GuildBankTabInfo // only when FullUpdate && Tab==0
+	Items      []GuildBankListItem
 }
 
 // GuildBankTabInfo is name/icon of a purchased bank tab.

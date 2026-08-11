@@ -123,13 +123,16 @@ type aiLogicMock struct {
 	moves    int
 }
 
-func (m *aiLogicMock) GetPosition() (x, y, z, o float32)         { return 0, 0, 0, 0 }
-func (m *aiLogicMock) MoveTo(x, y, z float32) error               { m.moves++; return nil }
-func (m *aiLogicMock) StopMoving() error                          { return nil }
-func (m *aiLogicMock) IsMoving() bool                             { return false }
-func (m *aiLogicMock) AttackTarget(g uint64) error                { m.casts = append(m.casts, "attack@"+fmt.Sprint(g)); return nil }
-func (m *aiLogicMock) StopAttack() error                          { return nil }
-func (m *aiLogicMock) SetTarget(g uint64) error                   { m.target = g; return nil }
+func (m *aiLogicMock) GetPosition() (x, y, z, o float32) { return 0, 0, 0, 0 }
+func (m *aiLogicMock) MoveTo(x, y, z float32) error      { m.moves++; return nil }
+func (m *aiLogicMock) StopMoving() error                 { return nil }
+func (m *aiLogicMock) IsMoving() bool                    { return false }
+func (m *aiLogicMock) AttackTarget(g uint64) error {
+	m.casts = append(m.casts, "attack@"+fmt.Sprint(g))
+	return nil
+}
+func (m *aiLogicMock) StopAttack() error        { return nil }
+func (m *aiLogicMock) SetTarget(g uint64) error { m.target = g; return nil }
 func (m *aiLogicMock) CastSpell(id uint32, t uint64) error {
 	m.casts = append(m.casts, fmt.Sprintf("%d@%d", id, t))
 	return nil
@@ -201,19 +204,19 @@ func (m *aiLogicMock) HasAuraOn(g uint64, sp uint32) bool {
 	}
 	return m.auras[g][sp]
 }
-func (m *aiLogicMock) CanCast(id uint32, _ uint64) bool { return m.IsSpellReady(id) }
-func (m *aiLogicMock) GetPetGUID() uint64          { return 0 }
-func (m *aiLogicMock) PetAttack(uint64)            {}
-func (m *aiLogicMock) GetStance() int              { return 0 }
-func (m *aiLogicMock) GetPowerType() uint8         { return 1 }
+func (m *aiLogicMock) CanCast(id uint32, _ uint64) bool      { return m.IsSpellReady(id) }
+func (m *aiLogicMock) GetPetGUID() uint64                    { return 0 }
+func (m *aiLogicMock) PetAttack(uint64)                      {}
+func (m *aiLogicMock) GetStance() int                        { return 0 }
+func (m *aiLogicMock) GetPowerType() uint8                   { return 1 }
 func (m *aiLogicMock) IsBehindTarget(targetGUID uint64) bool { return true }
 
-func (m *aiLogicMock) ValidationMode() bool { return false }
+func (m *aiLogicMock) ValidationMode() bool  { return false }
 func (m *aiLogicMock) ConsumeTeleport() bool { return false }
 
-func (m *aiLogicMock) GetFacing() float32 { return 0 }
-func (m *aiLogicMock) SetFacing(float32) error { return nil }
-func (m *aiLogicMock) FaceTarget(uint64) bool { return true }
+func (m *aiLogicMock) GetFacing() float32       { return 0 }
+func (m *aiLogicMock) SetFacing(float32) error  { return nil }
+func (m *aiLogicMock) FaceTarget(uint64) bool   { return true }
 func (m *aiLogicMock) SetSheathed(uint32) error { return nil }
 
 func (m *aiLogicMock) GetOwnGUID() uint64 { return 123456 } // mock self GUID for faction tests
@@ -312,7 +315,6 @@ for i=1,6 do ai:Tick() end
 		t.Log("NOTE: rend action registered in arms but may require specific rage/stance/target-hp conditions in full rotation. Core trigger+action path loaded.")
 	}
 
-
 	// === Scenario B: Death -> .revive command ===
 	mock.alive = false
 	mock.commands = nil
@@ -389,4 +391,3 @@ func firstN(ss []string, n int) []string {
 	}
 	return ss[:n]
 }
-

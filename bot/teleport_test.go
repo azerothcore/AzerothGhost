@@ -7,8 +7,10 @@ import (
 )
 
 // TestSummonNearTeleport_InterruptsAndFlagsLua mirrors the log sequence:
-//   in_world -> near_teleport (MSG_MOVE_TELEPORT_ACK(smsg))
-//   near_teleport -> in_world (MSG_MOVE_TELEPORT_ACK)
+//
+//	in_world -> near_teleport (MSG_MOVE_TELEPORT_ACK(smsg))
+//	near_teleport -> in_world (MSG_MOVE_TELEPORT_ACK)
+//
 // and asserts movement/combat sticky state is cleared and Lua can consume the event.
 func TestSummonNearTeleport_InterruptsAndFlagsLua(t *testing.T) {
 	w := client.NewWorldClient("u", nil, func(string, ...interface{}) {})

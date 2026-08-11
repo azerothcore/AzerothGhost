@@ -97,15 +97,15 @@ const (
 	CmsgNextCinematicCamera uint16 = 0x00FB
 
 	// Combat opcodes
-	CmsgAttackSwing         uint16 = 0x0141
-	CmsgAttackStop          uint16 = 0x0142
-	SmsgAttackStart         uint16 = 0x0143
-	SmsgAttackStop          uint16 = 0x0144
+	CmsgAttackSwing           uint16 = 0x0141
+	CmsgAttackStop            uint16 = 0x0142
+	SmsgAttackStart           uint16 = 0x0143
+	SmsgAttackStop            uint16 = 0x0144
 	SmsgAttackSwingNotInRange uint16 = 0x0145
 	SmsgAttackSwingBadFacing  uint16 = 0x0146
 	SmsgAttackSwingDeadTarget uint16 = 0x0148
 	SmsgAttackSwingCantAttack uint16 = 0x0149
-	SmsgAttackerStateUpdate uint16 = 0x014A
+	SmsgAttackerStateUpdate   uint16 = 0x014A
 
 	// Spell opcodes
 	CmsgCastSpell     uint16 = 0x012E
@@ -113,7 +113,7 @@ const (
 	SmsgSpellGo       uint16 = 0x0132
 	SmsgSpellFailure  uint16 = 0x0133
 	SmsgSpellCooldown uint16 = 0x0134
-	SmsgCastFailed    uint16 = 0x0130  // server error for failed casts (may be sent on bad target)
+	SmsgCastFailed    uint16 = 0x0130 // server error for failed casts (may be sent on bad target)
 	SmsgInitialSpells uint16 = 0x012A
 	SmsgCooldownEvent uint16 = 0x0135
 	SmsgClearCooldown uint16 = 0x01DE
@@ -319,17 +319,17 @@ const (
 
 // UnitFlags
 const (
-	UnitFlagInCombat      uint32 = 0x00080000
-	UnitFlagNotAttackable   uint32 = 0x00000002
-	UnitFlagNotAttackable1  uint32 = 0x00000080
-	UnitFlagImmuneToPC      uint32 = 0x00000100
-	UnitFlagNotAttackable2  uint32 = 0x00010000
-	UnitFlagNotSelectable   uint32 = 0x02000000
-	UnitFlagDisarmed      uint32 = 0x00200000
-	UnitFlagPacified      uint32 = 0x00020000
-	UnitFlagStunned       uint32 = 0x00040000
-	UnitFlagDead          uint32 = 0x20000000
-	UnitFlagTaxiFlight    uint32 = 0x00100000  // from AC UnitDefines.h - must skip for attack (see _IsValidAttackTarget)
+	UnitFlagInCombat       uint32 = 0x00080000
+	UnitFlagNotAttackable  uint32 = 0x00000002
+	UnitFlagNotAttackable1 uint32 = 0x00000080
+	UnitFlagImmuneToPC     uint32 = 0x00000100
+	UnitFlagNotAttackable2 uint32 = 0x00010000
+	UnitFlagNotSelectable  uint32 = 0x02000000
+	UnitFlagDisarmed       uint32 = 0x00200000
+	UnitFlagPacified       uint32 = 0x00020000
+	UnitFlagStunned        uint32 = 0x00040000
+	UnitFlagDead           uint32 = 0x20000000
+	UnitFlagTaxiFlight     uint32 = 0x00100000 // from AC UnitDefines.h - must skip for attack (see _IsValidAttackTarget)
 )
 
 // CharEnumEntry holds character data from SMSG_CHAR_ENUM
@@ -740,14 +740,14 @@ type WorldClient struct {
 	level     uint32
 
 	// Protocol session phase (AC STATUS_* analogue for bots)
-	phaseMu              sync.RWMutex
-	phase                SessionPhase
-	lastTimeSyncCounter  uint32
-	timeSyncResponses    uint64
-	worldportAcksSent    uint64
-	teleportAcksSent     uint64
-	teleportSeq          uint64 // increments on each completed self near/far teleport
-	phaseWaiters         []chan SessionPhase
+	phaseMu             sync.RWMutex
+	phase               SessionPhase
+	lastTimeSyncCounter uint32
+	timeSyncResponses   uint64
+	worldportAcksSent   uint64
+	teleportAcksSent    uint64
+	teleportSeq         uint64 // increments on each completed self near/far teleport
+	phaseWaiters        []chan SessionPhase
 
 	// Callbacks
 	logFunc            func(format string, args ...interface{})
@@ -759,9 +759,9 @@ type WorldClient struct {
 	OnKill             func(victimGUID uint64)
 	OnObjectUpdate     func(guid uint64, obj *WorldObject)
 	OnObjectRemove     func(guid uint64)
-	OnLootOpened  func(lootGUID uint64, items []LootItem)
-	OnCombatStart func(attackerGUID, victimGUID uint64)
-	OnCombatStop  func()
+	OnLootOpened       func(lootGUID uint64, items []LootItem)
+	OnCombatStart      func(attackerGUID, victimGUID uint64)
+	OnCombatStop       func()
 	// OnInvalidTarget is fired only for terminal rejects (dead / cant-attack).
 	// Prefer OnAttackReject for full taxonomy (transient vs terminal).
 	OnInvalidTarget func(victimGUID uint64)
@@ -1918,7 +1918,7 @@ func (w *WorldClient) AttackSwing(targetGUID uint64) error {
 	binary.Write(buf, binary.LittleEndian, targetGUID)
 	w.combatMu.Lock()
 	w.attackingGUID = targetGUID
-	w.inCombat = true   // Optimistic: we initiated attack on (what we believe is) a valid target. Server will send STOP or swing error if incorrect (we now handle those).
+	w.inCombat = true // Optimistic: we initiated attack on (what we believe is) a valid target. Server will send STOP or swing error if incorrect (we now handle those).
 	w.combatMu.Unlock()
 	return w.sendPacket(CmsgAttackSwing, buf.Bytes())
 }
@@ -1995,7 +1995,7 @@ func (w *WorldClient) CastSpellAtPosition(spellID uint32, x, y, z float32) error
 	buf := new(bytes.Buffer)
 	buf.WriteByte(0) // castCount
 	binary.Write(buf, binary.LittleEndian, spellID)
-	buf.WriteByte(0)                                  // castFlags
+	buf.WriteByte(0)                                     // castFlags
 	binary.Write(buf, binary.LittleEndian, uint32(0x40)) // TARGET_FLAG_DEST_LOCATION
 	// Packed transport GUID (0 = none) then xyz.
 	buf.WriteByte(0)
@@ -2088,7 +2088,6 @@ func (w *WorldClient) Teleport(mapID uint32, x, y, z, o float32) error {
 	cmd := fmt.Sprintf(".go xyz %.2f %.2f %.2f %d", x, y, z, mapID)
 	return w.SendGMCommand(cmd)
 }
-
 
 // GroupInvite sends CMSG_GROUP_INVITE to invite a player by name
 func (w *WorldClient) GroupInvite(playerName string) error {
@@ -2982,14 +2981,14 @@ func (w *WorldClient) handleClearCooldown(data []byte) {
 
 // 3.3.5a / AzerothCore AuraFlags (SpellAuraDefines.h).
 const (
-	auraFlagEffIndex0          uint8 = 0x01
-	auraFlagEffIndex1          uint8 = 0x02
-	auraFlagEffIndex2          uint8 = 0x04
-	auraFlagCaster             uint8 = 0x08 // set when caster == target (self-cast)
-	auraFlagPositive           uint8 = 0x10
-	auraFlagDuration           uint8 = 0x20
+	auraFlagEffIndex0           uint8 = 0x01
+	auraFlagEffIndex1           uint8 = 0x02
+	auraFlagEffIndex2           uint8 = 0x04
+	auraFlagCaster              uint8 = 0x08 // set when caster == target (self-cast)
+	auraFlagPositive            uint8 = 0x10
+	auraFlagDuration            uint8 = 0x20
 	auraFlagAnyEffectAmountSent uint8 = 0x40
-	auraFlagNegative           uint8 = 0x80
+	auraFlagNegative            uint8 = 0x80
 )
 
 // parseAuraSlotUpdate reads one aura slot from an SMSG_AURA_UPDATE* stream.

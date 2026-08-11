@@ -26,7 +26,6 @@ import (
 
 var _ scenario.AIBundle // ensure import is used (AIBundle support wiring)
 
-
 func openDB(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
@@ -125,8 +124,8 @@ type Bot struct {
 	lastLootAttemptGUID uint64
 	lastLootAttemptAt   time.Time
 	lastAttackSwingAt   time.Time
-	lastCastTime    time.Time // GCD tracking
-	lastVictoryRush bool      // Victory Rush proc available
+	lastCastTime        time.Time // GCD tracking
+	lastVictoryRush     bool      // Victory Rush proc available
 
 	// For unstick from bad/dead targets we selected but never entered real combat with
 	currentTargetSetAt  time.Time
@@ -781,7 +780,7 @@ func (b *Bot) preLoginDBSetup() {
 		posZ = 26.057
 		mapID = 1
 		// small per-bot jitter so not all on exact same point
-		jitter := float64((len(b.config.CharacterName) % 10) - 5) * 2.0
+		jitter := float64((len(b.config.CharacterName)%10)-5) * 2.0
 		posX += jitter
 		posY += jitter * 0.5
 		needsUpdate = true

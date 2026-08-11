@@ -103,8 +103,8 @@ func DefaultConfig() Config {
 		// Orchestrator enables clean character creation by default (delete others first)
 		DeleteExistingCharacters: true,
 		// Default: spawn at most 2 bots every 10 seconds (conservative)
-		SpawnRateLimit:    2,
-		SpawnRateInterval: 10 * time.Second,
+		SpawnRateLimit:     2,
+		SpawnRateInterval:  10 * time.Second,
 		LogDecisionsToChat: false, // off for scale by default
 	}
 }
@@ -144,23 +144,23 @@ type BotNodeResult struct {
 // Matches/extends the one in server/ for wire compatibility. Includes
 // LuaCode and AIBundle for scenario support.
 type NodeLaunchRequest struct {
-	BotID               string              `json:"bot_id"`
-	Username            string              `json:"username"`
-	Password            string              `json:"password"`
-	AuthServer          string              `json:"auth_server"`
-	CharacterName       string              `json:"character_name"`
-	Race                uint8               `json:"race"`
-	Class               uint8               `json:"class"`
-	Mode                string              `json:"mode"`
-	DungeonName         string              `json:"dungeon_name"`
-	DataDir             string              `json:"data_dir"`
-	PathfindingAddr     string              `json:"pathfinding_addr"`
-	LuaScript           string              `json:"lua_script"`
-	LuaCode             string              `json:"lua_code"`
-	AIBundle            scenario.AIBundle   `json:"ai_bundle"`
-	DeleteExistingChars bool                `json:"delete_existing_chars"`
-	LogDecisionsToChat  bool                `json:"log_decisions_to_chat"`
-	DisableTargetCache  bool                `json:"disable_target_cache"`
+	BotID               string            `json:"bot_id"`
+	Username            string            `json:"username"`
+	Password            string            `json:"password"`
+	AuthServer          string            `json:"auth_server"`
+	CharacterName       string            `json:"character_name"`
+	Race                uint8             `json:"race"`
+	Class               uint8             `json:"class"`
+	Mode                string            `json:"mode"`
+	DungeonName         string            `json:"dungeon_name"`
+	DataDir             string            `json:"data_dir"`
+	PathfindingAddr     string            `json:"pathfinding_addr"`
+	LuaScript           string            `json:"lua_script"`
+	LuaCode             string            `json:"lua_code"`
+	AIBundle            scenario.AIBundle `json:"ai_bundle"`
+	DeleteExistingChars bool              `json:"delete_existing_chars"`
+	LogDecisionsToChat  bool              `json:"log_decisions_to_chat"`
+	DisableTargetCache  bool              `json:"disable_target_cache"`
 
 	// Validation flags (propagated only when doing quality validation runs)
 	ValidationMode      bool   `json:"validation_mode"`

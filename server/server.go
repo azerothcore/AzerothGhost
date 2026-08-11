@@ -38,25 +38,25 @@ func NewServerWithDefaults(dataDir, pathfindingAddress string) *Server {
 
 // LaunchRequest is the request body for launching a new bot (extended for AI/Scenario support).
 type LaunchRequest struct {
-	Username            string              `json:"username"`
-	Password            string              `json:"password"`
-	AuthServer          string              `json:"auth_server"`
-	CharacterName       string              `json:"character_name"`
-	RealmIndex          int                 `json:"realm_index"`
-	Race                uint8               `json:"race"`
-	Class               uint8               `json:"class"`
-	Gender              uint8               `json:"gender"`
-	Mode                string              `json:"mode"`
-	DungeonName         string              `json:"dungeon_name"`
-	DataDir             string              `json:"data_dir"`
-	PathfindingAddr     string              `json:"pathfinding_addr"`
-	LuaScript           string              `json:"lua_script"`
-	LuaCode             string              `json:"lua_code"`
-	AIBundle            scenario.AIBundle   `json:"ai_bundle"`
-	BotID               string              `json:"bot_id"`
-	DeleteExistingChars bool                `json:"delete_existing_chars"`
-	DisableTargetCache  bool                `json:"disable_target_cache"`
-	LogDecisionsToChat  bool                `json:"log_decisions_to_chat"`
+	Username            string            `json:"username"`
+	Password            string            `json:"password"`
+	AuthServer          string            `json:"auth_server"`
+	CharacterName       string            `json:"character_name"`
+	RealmIndex          int               `json:"realm_index"`
+	Race                uint8             `json:"race"`
+	Class               uint8             `json:"class"`
+	Gender              uint8             `json:"gender"`
+	Mode                string            `json:"mode"`
+	DungeonName         string            `json:"dungeon_name"`
+	DataDir             string            `json:"data_dir"`
+	PathfindingAddr     string            `json:"pathfinding_addr"`
+	LuaScript           string            `json:"lua_script"`
+	LuaCode             string            `json:"lua_code"`
+	AIBundle            scenario.AIBundle `json:"ai_bundle"`
+	BotID               string            `json:"bot_id"`
+	DeleteExistingChars bool              `json:"delete_existing_chars"`
+	DisableTargetCache  bool              `json:"disable_target_cache"`
+	LogDecisionsToChat  bool              `json:"log_decisions_to_chat"`
 
 	// Validation tooling (propagated from orchestrator/scenario; default false = no perf cost)
 	ValidationMode      bool   `json:"validation_mode"`

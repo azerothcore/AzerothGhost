@@ -11,13 +11,13 @@ import (
 type SessionPhase int
 
 const (
-	PhaseNone SessionPhase = iota
-	PhaseConnected         // TCP + crypto ready, waiting AUTH_RESPONSE
-	PhaseAuthed            // AUTH_OK; char enum/create/login allowed
-	PhaseLoading           // CMSG_PLAYER_LOGIN sent; waiting LOGIN_VERIFY_WORLD
-	PhaseInWorld           // character in world; normal gameplay
-	PhaseFarTransfer       // SMSG_NEW_WORLD received; WORLDPORT_ACK in flight
-	PhaseNearTeleport      // SMSG_MOVE_TELEPORT for self; TELEPORT_ACK in flight
+	PhaseNone         SessionPhase = iota
+	PhaseConnected                 // TCP + crypto ready, waiting AUTH_RESPONSE
+	PhaseAuthed                    // AUTH_OK; char enum/create/login allowed
+	PhaseLoading                   // CMSG_PLAYER_LOGIN sent; waiting LOGIN_VERIFY_WORLD
+	PhaseInWorld                   // character in world; normal gameplay
+	PhaseFarTransfer               // SMSG_NEW_WORLD received; WORLDPORT_ACK in flight
+	PhaseNearTeleport              // SMSG_MOVE_TELEPORT for self; TELEPORT_ACK in flight
 	PhaseLogout
 )
 

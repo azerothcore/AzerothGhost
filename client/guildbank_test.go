@@ -30,10 +30,10 @@ func TestParseGuildBankListFullTab0(t *testing.T) {
 	buf = append(buf, 1) // n items
 	buf = append(buf, 0) // slot
 	putU32(2589)
-	putI32(0) // flags
-	putI32(0) // random prop
-	putI32(5) // count
-	putI32(0) // enchant
+	putI32(0)            // flags
+	putI32(0)            // random prop
+	putI32(5)            // count
+	putI32(0)            // enchant
 	buf = append(buf, 0) // charges
 	buf = append(buf, 0) // gems
 

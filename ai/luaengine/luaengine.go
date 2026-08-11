@@ -59,7 +59,7 @@ type BotAPI interface {
 	GetPetGUID() uint64
 	PetAttack(target uint64)
 	GetStance() int
-	GetOwnGUID() uint64  // own character GUID for faction/self checks
+	GetOwnGUID() uint64    // own character GUID for faction/self checks
 	SetLevel(level uint32) // force level for scenario prep (GM .level may not update internal state immediately)
 
 	GetPowerType() uint8

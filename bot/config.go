@@ -20,7 +20,7 @@ type Config struct {
 	Gender uint8 `json:"gender"`
 
 	// Navigation
-	DataDir            string `json:"data_dir"` // root containing mmaps/, maps/, vmaps/
+	DataDir            string `json:"data_dir"`            // root containing mmaps/, maps/, vmaps/
 	PathfindingAddress string `json:"pathfinding_address"` // optional remote (deprioritized)
 
 	// Lua

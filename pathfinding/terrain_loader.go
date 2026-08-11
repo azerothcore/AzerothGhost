@@ -50,20 +50,20 @@ type gridTerrain struct {
 	v8f []float32 // 128*128
 
 	// uint16
-	v9u16 []uint16
-	v8u16 []uint16
+	v9u16  []uint16
+	v8u16  []uint16
 	u16Mul float32
 
 	// uint8
-	v9u8 []uint8
-	v8u8 []uint8
+	v9u8  []uint8
+	v8u8  []uint8
 	u8Mul float32
 
 	flags uint32 // height header flags
 }
 
 func packGridKey(mapID uint32, gx, gy int) uint64 {
-	return (uint64(mapID) << 32) | (uint64(uint16(gx))<<16) | uint64(uint16(gy))
+	return (uint64(mapID) << 32) | (uint64(uint16(gx)) << 16) | uint64(uint16(gy))
 }
 
 // NewTerrainManager creates a TerrainManager reading .map files from mapsDir.
@@ -91,7 +91,7 @@ func (tm *TerrainManager) GetHeight(mapID uint32, x, y, z float32) (float32, boo
 	if h <= invalidHeight+1 { // treat as invalid
 		return 0, false
 	}
-	if !fuzzyGe(z, h - GROUND_HEIGHT_TOLERANCE) {
+	if !fuzzyGe(z, h-GROUND_HEIGHT_TOLERANCE) {
 		return 0, false
 	}
 	return h, true
@@ -328,7 +328,7 @@ func (gt *gridTerrain) getHeightFromUint16(x, y float32) float32 {
 			a := h2 - h1
 			b := h5 - h1 - h2
 			c := h1
-			res := (a*x + b*y + c) * gt.u16Mul + gt.gridHeight
+			res := (a*x+b*y+c)*gt.u16Mul + gt.gridHeight
 			return res
 		}
 		h1 := float32(gt.v9u16[v9Base+0])
@@ -337,7 +337,7 @@ func (gt *gridTerrain) getHeightFromUint16(x, y float32) float32 {
 		a := h5 - h1 - h3
 		b := h3 - h1
 		c := h1
-		return (a*x + b*y + c) * gt.u16Mul + gt.gridHeight
+		return (a*x+b*y+c)*gt.u16Mul + gt.gridHeight
 	}
 	if x > y {
 		h2 := float32(gt.v9u16[v9Base+129])
@@ -346,7 +346,7 @@ func (gt *gridTerrain) getHeightFromUint16(x, y float32) float32 {
 		a := h2 + h4 - h5
 		b := h4 - h2
 		c := h5 - h4
-		return (a*x + b*y + c) * gt.u16Mul + gt.gridHeight
+		return (a*x+b*y+c)*gt.u16Mul + gt.gridHeight
 	}
 	h3 := float32(gt.v9u16[v9Base+1])
 	h4 := float32(gt.v9u16[v9Base+130])
@@ -354,7 +354,7 @@ func (gt *gridTerrain) getHeightFromUint16(x, y float32) float32 {
 	a := h4 - h3
 	b := h3 + h4 - h5
 	c := h5 - h4
-	return (a*x + b*y + c) * gt.u16Mul + gt.gridHeight
+	return (a*x+b*y+c)*gt.u16Mul + gt.gridHeight
 }
 
 func (gt *gridTerrain) getHeightFromUint8(x, y float32) float32 {
@@ -379,7 +379,7 @@ func (gt *gridTerrain) getHeightFromUint8(x, y float32) float32 {
 			a := h2 - h1
 			b := h5 - h1 - h2
 			c := h1
-			return (a*x + b*y + c) * gt.u8Mul + gt.gridHeight
+			return (a*x+b*y+c)*gt.u8Mul + gt.gridHeight
 		}
 		h1 := float32(gt.v9u8[v9Base+0])
 		h3 := float32(gt.v9u8[v9Base+1])
@@ -387,7 +387,7 @@ func (gt *gridTerrain) getHeightFromUint8(x, y float32) float32 {
 		a := h5 - h1 - h3
 		b := h3 - h1
 		c := h1
-		return (a*x + b*y + c) * gt.u8Mul + gt.gridHeight
+		return (a*x+b*y+c)*gt.u8Mul + gt.gridHeight
 	}
 	if x > y {
 		h2 := float32(gt.v9u8[v9Base+129])
@@ -396,7 +396,7 @@ func (gt *gridTerrain) getHeightFromUint8(x, y float32) float32 {
 		a := h2 + h4 - h5
 		b := h4 - h2
 		c := h5 - h4
-		return (a*x + b*y + c) * gt.u8Mul + gt.gridHeight
+		return (a*x+b*y+c)*gt.u8Mul + gt.gridHeight
 	}
 	h3 := float32(gt.v9u8[v9Base+1])
 	h4 := float32(gt.v9u8[v9Base+130])
@@ -404,7 +404,7 @@ func (gt *gridTerrain) getHeightFromUint8(x, y float32) float32 {
 	a := h4 - h3
 	b := h3 + h4 - h5
 	c := h5 - h4
-	return (a*x + b*y + c) * gt.u8Mul + gt.gridHeight
+	return (a*x+b*y+c)*gt.u8Mul + gt.gridHeight
 }
 
 // GetLiquidStatus is a simplified stub; full liquid not required for basic Z alignment now.
@@ -438,5 +438,3 @@ func (tm *TerrainManager) EnsureGridLoaded(mapID uint32, gx, gy int32) error {
 	_, err := tm.getOrLoadGrid(mapID, int(gx), int(gy))
 	return err
 }
-
-

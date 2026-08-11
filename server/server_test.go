@@ -68,13 +68,13 @@ func TestLaunchRequestJSONWithAIPayloads(t *testing.T) {
 func TestNodeLaunchRequestJSONAndMapping(t *testing.T) {
 	// Verify NodeLaunchRequest (used by LaunchFromOrchestrator) carries AI fields.
 	nlr := NodeLaunchRequest{
-		BotID:       "b1",
-		Username:    "u",
-		Password:    "p",
-		AuthServer:  "a:1",
+		BotID:         "b1",
+		Username:      "u",
+		Password:      "p",
+		AuthServer:    "a:1",
 		CharacterName: "C",
-		LuaCode:     "function on_tick() end",
-		AIBundle:    scenario.AIBundle{Main: "-- ai here"},
+		LuaCode:       "function on_tick() end",
+		AIBundle:      scenario.AIBundle{Main: "-- ai here"},
 	}
 
 	b, _ := json.Marshal(nlr)
@@ -85,4 +85,3 @@ func TestNodeLaunchRequestJSONAndMapping(t *testing.T) {
 		t.Fatalf("NodeLaunchRequest AI fields did not roundtrip: %+v", out)
 	}
 }
-

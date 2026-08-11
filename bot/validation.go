@@ -28,10 +28,10 @@ func (b *Bot) wireValidationInstrumentation() {
 	prevReject := b.world.OnAttackReject
 	b.world.OnAttackReject = func(r client.AttackReject) {
 		b.logValidation("reject", map[string]interface{}{
-			"reason": r.Reason,
-			"class":  r.Class.String(),
-			"guid":   fmt.Sprintf("%d", r.GUID),
-			"opcode": client.OpcodeName(r.Opcode),
+			"reason":    r.Reason,
+			"class":     r.Class.String(),
+			"guid":      fmt.Sprintf("%d", r.GUID),
+			"opcode":    client.OpcodeName(r.Opcode),
 			"opcode_id": r.Opcode,
 		})
 		if prevReject != nil {

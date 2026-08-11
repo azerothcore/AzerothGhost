@@ -11,7 +11,7 @@ func TestParseItemPushResult(t *testing.T) {
 	binary.LittleEndian.PutUint32(buf[8:12], 1)  // received
 	binary.LittleEndian.PutUint32(buf[12:16], 0) // created
 	binary.LittleEndian.PutUint32(buf[16:20], 1) // chat
-	buf[20] = 255                               // bag
+	buf[20] = 255                                // bag
 	binary.LittleEndian.PutUint32(buf[21:25], 23)
 	binary.LittleEndian.PutUint32(buf[25:29], ItemGuildCharterEntry)
 	binary.LittleEndian.PutUint32(buf[29:33], 0)
