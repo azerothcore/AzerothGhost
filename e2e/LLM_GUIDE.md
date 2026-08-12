@@ -33,8 +33,11 @@ Env (point at **your** AC):
 | `E2E_WORLD_DSN` | `…/acore_world` |
 
 ```bash
-go test -tags=e2e ./... -count=1 -v -timeout 30m
+# packages parallel; keep tests serial within package (pad isolation)
+go test -tags=e2e ./... -count=1 -v -timeout 30m -parallel 1
 ```
+
+Optional: `E2E_ALLOW_SOFT_PASS=1` only for local SoftPass debug (fail-closed by default).
 
 ---
 
@@ -42,21 +45,62 @@ go test -tags=e2e ./... -count=1 -v -timeout 30m
 
 **Fixture:** `NewSolo` · `NewScenario` + `ByRole` · opts `Prefix,Race,Class,Level,LearnAllClass,CombatReady,CombatReadyFull,StartPad,SkipGM`
 
-**Place:** `Teleport` · `TeleportPad` · `TeleNamed` · `GoCreatureID` · `GoCreatureGUID` · `WaitUnit` · `WaitUnitAny` · `FindUnit` · `Pos` · `PadStormwindOutskirts` · maps `MapEasternKingdoms|Outland|Northrend|Ulduar`
+**Place:** **`PackagePad(t)`** (sticky per suite folder) · `Teleport` · `TeleportPad` · `TeleportAll` / **`TeleportAllPad`** · `TeleNamed` · `GoCreatureID` · `GoCreatureGUID` · `WaitUnit` · `WaitUnitAny` · `FindUnit` · `Pos` · `DistFrom` · **`AssertNear`** / **`AssertNearPad`** / **`AssertMoved`** · `Distance3D` · maps `MapEasternKingdoms|Kalimdor|Outland|Northrend|Ulduar`  
+Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
-**Combat:** `CombatReady` / `CombatReadyFull` · `Engage` · `Damage` · `DamageKill` (never toggle `.gm on`) · `Attack` · `UnitInCombat` · `WaitUnitCombat` · `WaitUnitDead` · `UnitHP`
+**Combat:** `CombatReady` / `CombatReadyFull` · `Engage` · `Damage` · `DamageKill` (never toggle `.gm on`) · `Attack` · `UnitInCombat` · `WaitUnitCombat` · `WaitUnitDead` · `UnitHP` · `UnitTarget` · `WaitUnitTarget` · `AssertUnitTarget`
 
-**Cast:** `Cast` · `CastMust` · `TryCast` · `CastOrGM` · `CastRetries` · `CastAtPosition` · `CastSelfGM` · `Learn` · `LearnAll` · `Face` · `SpellFailReasonName` · `DefaultCastTimeout`
+**Cast:** `Cast` · `CastMust` · `TryCast` · `CastOrGM` · `CastRetries` · `CastAtPosition` · `CastSelfGM` · `Learn` · `LearnAll` · `Face` · `SpellFailReasonName` · `DefaultCastTimeout` · `PlayerPower` · `IsChanneling` / `ChannelSpell` · `WaitChanneling` / `WaitNotChanneling` · `CancelCast` · `CancelAura`
 
-**Aura:** self `ApplyAura` · `HasAura` · `AssertAuraRemains` · `AssertAuraConsumed` · unit `WaitUnitAura` · `UnitHasAura` · package `AssertUnitAuraStable(t, bot.World, …)`
+**Aura:** self `ApplyAura` · `HasAura` · `AuraStacks` · `AssertAuraRemains` · `AssertAuraConsumed` · unit `WaitUnitAura` · `UnitHasAura` · `UnitAuraStacks` · package `AssertUnitAuraStable(t, bot.World, …)`
 
-**Quest/death/items:** `AddQuest` · `Save` · `QuestStatus` · `QuestStatusAfterSave` · `AssertQuestStatus` · `DieAndRepop` · `AddItem` · `EquipEntry` · `SetSkill`
+**Quest/death/items/money:** `AddQuest` · `Save` · `QuestStatus` · `QuestStatusAfterSave` · `AssertQuestStatus` · `DieAndRepop` · `Die` · `WaitDead` · `ReleaseSpirit` · `ReclaimCorpse` · `WaitAlive` · `AddItem` · `EquipEntry` · `SetSkill` · `PlayerMoney` · `WaitPlayerMoney` · `MoneyAfterSave` · `ModMoney` / `SetMoney` · **`AssertMoneyAtLeast`** / `AssertMoneyEqual` · `InventoryCount` · **`AssertInventoryAtLeast`** (CharDB after Save)
+
+**Group (multi-bot):** `FormParty(t, leader, mates…)` / **`FormPartyAtPad(t, pad, leader, mates…)`** / `FormPartyWith` · `Invite` · `WaitGroupInvite` · `AcceptGroup` · `DeclineGroup` · `LeaveGroup` / `DisbandGroup` · `DisbandParty` · **`WaitGroupList`** · `WaitNotInGroup` · **`WaitIsGroupLeader`** · `InGroup` · `IsGroupLeader` · `GroupMembers` · `GroupState` · `SetLeader` · `Uninvite` · `SetLootMethod` (client `LootMethod*` constants). Prefer `WaitGroupList` / `WaitIsGroupLeader` over sleep loops after invite/accept/leader transfer.
+
+**Trade (multi-bot):** `OpenTrade(t, initiator, target)` · `InitiateTrade` · `AcceptTradeWindow` · **`WaitTradeOpen`** · `SetTradeItem(slot,bag,invSlot)` · `SetTradeGold` · `AcceptTrade` · `CancelTrade` · `CompleteTrade` · `WaitTradeComplete` · `WaitTradeCancelled` · `WaitTradeStatus` · `TradeOpen` (cache). `OpenTrade`/`CompleteTrade` arm packet waiters — do not add fixed sleeps around them.
+
+**Loot / rolls:** after kill → **`WaitUnitLootable`** then `OpenLoot` · `LootRelease` · `LootTakeItem` · `WaitLootStartRoll` · `RollNeed`/`RollGreed`/`RollPass` · `WaitLootRollWon` · `WaitLootAllPassed` · `MasterLootGive`
+
+**Pets:** `WaitPlayerPet` · `PlayerPetGUID` · `DismissPet` · `WaitNoPlayerPet` · `AssertNoPlayerPet` · `PetAttack`
 
 **Observe:** `Spawn` · `UnitsByEntry` · `WaitNewUnits` · package `NewSpawnSetTracker` · `LivingByEntries` · `AssertIntervalNotAccelerated` · `ObserveUnitTargets`
 
-**Misc:** `TeleportAll` · `EnableHostilePvP` · `Relog` · `GM` · `ProbeWorldAlive` / `AssertWorldAlive`
+**Session lifecycle:** **`WaitInWorld`** (PhaseInWorld after Relog / far tele) · `Relog` (graceful logout+reenter, waits InWorld) · **`HardDisconnect` / `CloseHard`** (socket close, **no** logout — probe with **another** bot via `ProbeWorldAlive` / `AssertWorldAlive`) · `GM` · `TeleportAll` / `TeleportAllPad` · `EnableHostilePvP`
 
-**Assert severity:** `Preconditionf` · `ConfirmedBugf(t, issue, …)` · `HarnessFailf` · `SoftWarnf`
+**Assert severity:** `Preconditionf` · `ConfirmedBugf(t, issue, …)` · `HarnessFailf` · `SoftWarnf` · **`Assertf`/`AssertBugf`** (post-drive product oracle). **`SoftPass` is disabled by default** (fails); only `E2E_ALLOW_SOFT_PASS=1` allows it — prefer Preconditionf.
+
+**Hooks (race-safe multi-subscriber):** prefer `AddPacketHook` / `AddTradeStatusHook` / `AddLoot*Hook` / `AddGroup*Hook` / `AddSpellCastResultHook` with cancel; avoid assigning `On*` fields.
+
+**R1 helpers:** `DieMust` · `TryOpenLoot` · `SpawnKillLootable` · `ArmLootStartRoll` · `ArmLootRollOutcome` (Arm → Roll* → Wait) · `ArmGroupInvite` (Arm → Invite → Wait) · `WaitNear` · `DamageToFraction` · `HardDisconnectAndProbe` · `WaitLootMethod` · `TryWaitChanneling` · `CancelCastWhenChanneling` · `meta.Begin` (AC: no Parallel if serial)
+
+**Group loot fixtures:** use `CreatureGroupLootFixture` (15209) + `LootThresholdUncommon` (2). AC rejects thresh &lt; Uncommon; outdoor critters (3098) only drop greys/whites → no `SMSG_LOOT_START_ROLL`. Avoid MULTI_DROP / quest-conditioned “100%” items.
+
+**NPC / GO spawn cleanup:** `.npc add` and `.gobject add` are **persistent DB spawns**. Always use `SpawnKillLootable` / `Spawn` / `SpawnGameObject` (they register cleanup) or `DespawnCreatureSpawn` / `DespawnGameObjectSpawn` by **DB spawn id**. Never bare `.npc add` / `.gobject add` without cleanup — pad litter (Crimson Templar 15209, Gift of the Observer GO 194821) is a real failure mode. **Do not use `.npc add temp` for loot** (`TEMPSUMMON_CORPSE_DESPAWN` removes the corpse instantly; temp still lives ~120s — `Spawn` cleans on test end).
+
+**Pets / Risen Ghoul / guardians:** `NewSolo`/`NewScenario` register `CleanupOwnedSummons` on cleanup (dismiss pet + despawn SUMMONEDBY/CREATEDBY units: Risen Ghoul 26125, imps, totems…). After Raise Dead / heavy summons, also call `bot.CleanupOwnedSummons(t)` while still InWorld.
+
+**Pad isolation:** `go test ./... -parallel 1` → packages still parallel, tests **serial within package**. Use **`e2eharness.PackagePad(t)`** (sticky per suite folder for process life). Pads: Tower1/2, AbandonHouse (EK); NagrandArena + FloatingIsland1–3 (Outland); InMountains1–3 (Kalimdor). Preferred map for combat/social suites in harness `PreferredPackagePads`. Never park every suite on one SW cell.
+
+**Spawn cleanup path:** persistent adds → SQL DELETE + soft live despawn (`DespawnCreatureSpawn` / `DespawnGameObjectSpawn`). Safe after session close for SQL half; never bare add.
+
+---
+
+## Waiters over sleeps (required for new code)
+
+Pattern: **Arm → Send → Wait** on a real signal (packet / object cache / phase / TradeOpen / GroupState / HP).
+
+| After… | Wait on |
+|--------|---------|
+| Relog / far `.tele` / map transfer | **`WaitInWorld`** (and tele helpers use `WaitForTeleportAfter`) |
+| HardDisconnect | different bot: `ProbeWorldAlive` / `AssertWorldAlive` |
+| Group invite/accept / SetLeader | `WaitGroupList` / `WaitIsGroupLeader` / `WaitNotInGroup` |
+| Trade initiate/accept | `OpenTrade` / `WaitTradeOpen` / `WaitTradeStatus` / `CompleteTrade` |
+| Kill → loot | `WaitUnitDead` → **`WaitUnitLootable`** → `OpenLoot` |
+| Cast / aura / death | `Cast`/`WaitSpell*` · `WaitAura` · `WaitDead` / `WaitAlive` |
+| Nearby NPC after tele | `WaitUnit` / `WaitUnitGUID` (object cache) |
+
+**Banned in new tests:** `time.Sleep` / `WaitMS` / “settle” delays after an action when a condition exists. Short poll intervals (20–50ms) **inside** harness waiters are fine. If you truly need wall-clock (e.g. aura duration), assert with `AssertAuraRemains` / deadline waiters — not blind sleeps after setup.
 
 ---
 
@@ -66,10 +110,12 @@ go test -tags=e2e ./... -count=1 -v -timeout 30m
 - Do **not** `.gm on` mid-fight for `.damage` → evade; use `Damage`/`DamageKill`
 - Do **not** pull with GM mode still on → `CombatReady` first
 - Do **not** bare `.tele` when melee matters → `GoCreatureID`
-- Do **not** fixed long sleeps instead of waiters
+- Do **not** fixed long sleeps / **`WaitMS`** / blind `time.Sleep` after actions — use waiters (see above)
 - Do **not** invent harness APIs; use package helpers with `bot.World` if no method
-- Do **not** `.npc add` when bug is spell-summon path
+- Do **not** `.npc add` when bug is spell-summon path; do **not** bare `.npc add`/`.gobject add` without cleanup
 - Do **not** re-arm waiters during Wait
+- Do **not** share one world cell across packages — use `PackagePad(t)`
+- Do **not** use `SoftPass` to greenwash unjudgeable setup (fail-closed unless `E2E_ALLOW_SOFT_PASS=1`)
 - Do **not** assume ToCloud9 is required — AC world/auth is enough if `E2E_AUTH_ADDR` reaches clients’ auth/realm entry
 
 ---
@@ -81,7 +127,9 @@ go test -tags=e2e ./... -count=1 -v -timeout 30m
 | Setup blocked evaluation | `Preconditionf` |
 | Wrong core behaviour for tracked issue | `ConfirmedBugf(t, N, …)` |
 | Infra/timeout/SQL/cache | `HarnessFailf` |
+| Post-drive product oracle | `Assertf` / `AssertBugf` |
 | Soft note | `SoftWarnf` |
+| SoftPass | **Fails** unless `E2E_ALLOW_SOFT_PASS=1` — avoid in new tests |
 
 ---
 
@@ -103,7 +151,7 @@ import (
 
 // Issue: https://github.com/azerothcore/azerothcore-wotlk/issues/NNNNN  (optional)
 func TestMyFeature_ShortName(t *testing.T) {
-	t.Parallel()
+	t.Parallel() // omit or use meta.Begin(serial) if the scenario needs exclusive realm
 	bot := e2eharness.NewSolo(t, e2eharness.ScenarioOpts{
 		Prefix:        "Short",
 		Race:          e2eharness.RaceHuman,
@@ -111,15 +159,19 @@ func TestMyFeature_ShortName(t *testing.T) {
 		Level:         80,
 		LearnAllClass: true,
 	})
-	bot.TeleportPad(t, e2eharness.PadStormwindOutskirts)
+	pad := e2eharness.PackagePad(t) // sticky isolation pad for this suite folder
+	bot.TeleportPad(t, pad)
 	// GM mode on by default for setup. bot.CombatReady(t) before pulls.
 	// Drive: Cast/Engage/ApplyAura/DieAndRepop/Relog.
-	// Setup fail → Preconditionf; wrong core → ConfirmedBugf(t, N, …).
+	// Setup fail → Preconditionf; wrong core → ConfirmedBugf(t, N, …). Never SoftPass in new tests.
 	t.Logf("PASS …")
 }
 ```
 
-Multi-bot: `NewScenario` + `BotSpec{Role}` + `ByRole` + `EnableHostilePvP` if cross-faction.
+Multi-bot: `NewScenario` + `BotSpec{Role}` + `ByRole` + `EnableHostilePvP` if cross-faction.  
+Party: prefer `FormPartyAtPad(t, PackagePad(t), leader, mate)` (or `TeleportAllPad` + `FormParty`); cleanup with `DisbandParty` or `LeaveGroup`.  
+Hard drop / crash probe: `victim.HardDisconnect(t)` then `ProbeWorldAlive(t, probe, issue)` — never reuse victim session.  
+After Relog / far tele: `bot.WaitInWorld(t, 0)` if you left the helper path; `Relog`/`TeleNamed` already wait.
 
 ---
 
@@ -146,7 +198,8 @@ Multi-bot: `NewScenario` + `BotSpec{Role}` + `ByRole` + `EnableHostilePvP` if cr
 
 ## Handy constants (harness)
 
-`SpellCharge`, `SpellBlendingInAura`, `SpellGroundingTotem`, `SpellGroundingTotemEffect`,
+`SpellCharge`, `SpellTaunt`, `SpellDismissPet`, `SpellBlendingInAura`, `SpellGroundingTotem`, `SpellGroundingTotemEffect`,
 `SpellRainOfFire`, `SpellRaiseDead`, `SpellMountSwiftGryphon`, `QuestRethbanGauntlet`,
 `CreatureKologarn`, `CreatureGroundingTotem`, `CreatureTargetDummy`,
+`LootMethodFreeForAll`/`GroupLoot`/`MasterLoot`/`NeedBeforeGreed` (client package),
 `RaceHuman`/`RaceOrc`/`RaceTauren`, `ClassWarrior`/`ClassRogue`/`ClassShaman`/`ClassWarlock`/`ClassDeathKnight`.

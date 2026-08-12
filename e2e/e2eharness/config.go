@@ -31,6 +31,17 @@ const (
 	// Default password used by ensure-account helpers.
 	DefaultPassword = "test"
 
+	// LootThresholdUncommon is the AC minimum valid CMSG_LOOT_METHOD threshold
+	// (ITEM_QUALITY_UNCOMMON). Core rejects lower values; greys/whites never roll.
+	LootThresholdUncommon uint8 = 2
+
+	// CreatureGroupLootFixture is Crimson Templar (15209): 100% Abyssal Crest (20513),
+	// Quality=Uncommon, no MULTI_DROP / quest conditions — reliable SMSG_LOOT_START_ROLL
+	// under group/NBG with LootThresholdUncommon. Prefer over outdoor critters (e.g. 3098).
+	CreatureGroupLootFixture uint32 = 15209
+	// ItemGroupLootFixture is the guaranteed crest on CreatureGroupLootFixture.
+	ItemGroupLootFixture uint32 = 20513
+
 	// MinPetitionSigns matches charserver default MIN_PETITION_SIGNS.
 	MinPetitionSigns = 9
 

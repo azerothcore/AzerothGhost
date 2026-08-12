@@ -39,33 +39,90 @@ func CombatReadyDefaults(t *testing.T, w *client.WorldClient) {
 	CombatReady(t, w, CombatReadyOpts{God: true})
 }
 
-// EngageUntilCombat faces and attacks target until UNIT_FLAG_IN_COMBAT or timeout.
+// EngageUntilCombat faces and attacks target until the pull is observed, or timeout.
+// Pull is accepted when either:
+//   - UNIT_FLAG_IN_COMBAT is set on the target, or
+//   - target HP drops while still alive (training dummies often take .damage / swings
+//     without ever setting IN_COMBAT — Heroic Training Dummy is the common case).
 // Falls back to `.damage 1` (without enabling GM mode) if swings alone do not pull.
+//
+// If the unit dies before a pull is observed (common with L1 target dummies
+// vs L80 autoattack), fails immediately with a oneshot precondition instead of
+// burning the full timeout swinging a corpse.
 func EngageUntilCombat(t *testing.T, w *client.WorldClient, targetGUID uint64, timeout time.Duration) {
 	t.Helper()
 	if targetGUID == 0 {
 		Preconditionf(t, "EngageUntilCombat: target guid is 0")
 	}
-	FaceUnit(t, w, targetGUID)
+	// Multi-bot: unit may not be in this client's cache yet after another bot's Spawn.
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
+		if w.GetObject(targetGUID) != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if w.GetObject(targetGUID) == nil {
+		Preconditionf(t, "EngageUntilCombat: unit 0x%X never appeared in object cache within %s", targetGUID, timeout)
+	}
+
+	startHP, startMax := UnitHealth(w, targetGUID)
+	pulled := func() bool {
+		if UnitInCombat(w, targetGUID) {
+			return true
+		}
+		// Damage-taken oracle: HP reduced, still alive. Training dummies rarely set IN_COMBAT.
+		hp, max := UnitHealth(w, targetGUID)
+		if max > 0 && hp > 0 && startHP > 0 && hp < startHP {
+			return true
+		}
+		return false
+	}
+
+	FaceUnit(t, w, targetGUID)
+	for time.Now().Before(deadline) {
+		if unitDeadOrGone(w, targetGUID) {
+			Preconditionf(t, "unit 0x%X died before combat flag (oneshot? use tankier target e.g. HeroicTrainingDummy)", targetGUID)
+		}
 		_ = w.SetTarget(targetGUID)
 		_ = w.AttackSwing(targetGUID)
 		time.Sleep(400 * time.Millisecond)
-		if UnitInCombat(w, targetGUID) {
-			t.Logf("engaged 0x%X combat=true", targetGUID)
+		if pulled() {
+			hp, _ := UnitHealth(w, targetGUID)
+			t.Logf("engaged 0x%X combat=%v hp=%d→%d", targetGUID, UnitInCombat(w, targetGUID), startHP, hp)
 			return
+		}
+		if unitDeadOrGone(w, targetGUID) {
+			Preconditionf(t, "unit 0x%X died before combat flag (oneshot? use tankier target e.g. HeroicTrainingDummy)", targetGUID)
 		}
 		// Nudge threat without toggling GM mode.
 		_ = w.SetTarget(targetGUID)
 		MustGM(t, w, ".damage 1")
 		time.Sleep(300 * time.Millisecond)
-		if UnitInCombat(w, targetGUID) {
-			t.Logf("engaged 0x%X combat=true (via .damage 1)", targetGUID)
+		if pulled() {
+			hp, _ := UnitHealth(w, targetGUID)
+			t.Logf("engaged 0x%X combat=%v hp=%d→%d (via .damage 1)", targetGUID, UnitInCombat(w, targetGUID), startHP, hp)
 			return
 		}
 	}
-	Preconditionf(t, "unit 0x%X never entered combat within %s", targetGUID, timeout)
+	hp, _ := UnitHealth(w, targetGUID)
+	Preconditionf(t, "unit 0x%X never pulled within %s (combat=%v hp=%d/%d start=%d)",
+		targetGUID, timeout, UnitInCombat(w, targetGUID), hp, startMax, startHP)
+}
+
+// unitDeadOrGone reports zero health for a unit present in this client's cache.
+// Missing cache entries are NOT treated as dead — multi-bot spawns often lag
+// on non-spawning clients (GetObject nil until UPDATE_OBJECT arrives).
+func unitDeadOrGone(w *client.WorldClient, guid uint64) bool {
+	obj := w.GetObject(guid)
+	if obj == nil {
+		return false
+	}
+	// MaxHealth==0 often means fields not yet populated; do not treat as dead.
+	if obj.MaxHealth() > 0 && obj.Health() == 0 {
+		return true
+	}
+	return false
 }
 
 // DamageGM applies `.damage <amount>` to targetGUID. Does NOT toggle GM mode.

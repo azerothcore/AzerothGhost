@@ -16,9 +16,10 @@ type SpellCastResult struct {
 	FailReason uint8
 }
 
-// ArmSpellWaiter installs OnSpellCastResult to feed a buffered channel.
+// ArmSpellWaiter installs a spell-result hook to feed a buffered channel.
 // Call before CastSpell; then WaitSpell / WaitSpellSuccess.
 // Re-arming replaces the channel (same contract as bank waiters: never re-arm during Wait).
+// Uses AddSpellCastResultHook once (race-safe fan-out); re-arms only refresh spellCh.
 func (s *Session) ArmSpellWaiter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -36,9 +37,19 @@ func (s *Session) ArmSpellWaiter() {
 	rearm:
 		s.spellCh = make(chan SpellCastResult, 16)
 	}
-	ch := s.spellCh
+	if s.spellHookOn {
+		return
+	}
+	s.spellHookOn = true
+	chPtr := &s.spellCh
 	logf := s.logf
-	s.World.OnSpellCastResult = func(spellID uint32, success bool, failReason uint8) {
+	s.World.AddSpellCastResultHook(func(spellID uint32, success bool, failReason uint8) {
+		s.mu.Lock()
+		ch := *chPtr
+		s.mu.Unlock()
+		if ch == nil {
+			return
+		}
 		res := SpellCastResult{SpellID: spellID, Success: success, FailReason: failReason}
 		select {
 		case ch <- res:
@@ -47,7 +58,7 @@ func (s *Session) ArmSpellWaiter() {
 				logf("WARNING: waiter drop kind=spell spell=%d", spellID)
 			}
 		}
-	}
+	})
 }
 
 // WaitSpell waits for any spell cast result.
@@ -170,34 +181,27 @@ func AttackUntilHealthBelow(t *testing.T, s *Session, targetGUID uint64, maxHeal
 }
 
 // DamageTracker records SMSG_ATTACKERSTATEUPDATE damage by victim GUID.
-// Install via ArmDamageTracker; does not conflict with Session packet waiters
-// because it hooks OnPacket after ArmAllWaiters (wrap pattern).
+// Install via ArmDamageTracker; safe with Session packet waiters via multi-subscriber
+// AddPacketHook (no OnPacket clobber).
 type DamageTracker struct {
 	mu       sync.Mutex
 	byVictim map[uint64]uint32
 	events   int
 }
 
-// ArmDamageTracker wraps World.OnPacket to accumulate auto-attack damage.
-// Call after ArmAllWaiters / ArmSpellWaiter so petition waiters stay intact:
-// this chains onto the existing OnPacket.
+// ArmDamageTracker registers a packet hook to accumulate auto-attack damage.
+// Safe with ArmAllWaiters (multi-subscriber AddPacketHook — no clobber).
+// Hook stays for session lifetime (cancel not returned; e2e tests are short-lived).
 func ArmDamageTracker(s *Session) *DamageTracker {
 	dt := &DamageTracker{byVictim: make(map[uint64]uint32)}
-	prev := s.World.OnPacket
-	s.World.OnPacket = func(op uint16, data []byte) {
-		if prev != nil {
-			prev(op, data)
-		}
+	s.World.AddPacketHook(func(op uint16, data []byte) {
 		// SMSG_ATTACKERSTATEUPDATE = 0x014A — parse lightly when present.
 		if op == client.SmsgAttackerStateUpdate && len(data) >= 20 {
-			// Layout is complex (hit info flags). Best-effort: many AC builds put
-			// attacker/victim as packed GUIDs; full parse lives in world.go.
-			// Prefer client-side health drops via GetObject for assertions.
 			dt.mu.Lock()
 			dt.events++
 			dt.mu.Unlock()
 		}
-	}
+	})
 	return dt
 }
 

@@ -81,12 +81,24 @@ func (b *ScenarioBot) DamageKill(t *testing.T, guids []uint64, amount uint32, ti
 }
 
 // DieAndRepop dies, waits for death, and releases spirit.
+// After repop the client is teleported to a graveyard; waits on TeleportSeq / PhaseInWorld.
 func (b *ScenarioBot) DieAndRepop(t *testing.T) {
 	t.Helper()
-	b.Die(t)
-	b.WaitDead(t, 10*time.Second)
+	// DieMust (not bare Die) under pad thrash.
+	b.DieMust(t, 20*time.Second)
+	before := b.World.TeleportSeq()
 	b.ReleaseSpirit(t)
-	time.Sleep(300 * time.Millisecond)
+	// Ghost yard transfer is packet-driven (near/far tele). Soft-continue if no tele opcode.
+	if err := b.World.WaitForTeleportAfter(before, 10*time.Second); err != nil {
+		t.Logf("repop teleport wait: %v (continuing)", err)
+	}
+	if b.World.IsInWorld() {
+		return
+	}
+	// Ghost remains gameplay-capable once InWorld again.
+	if err := b.World.WaitForSessionPhase(client.PhaseInWorld, 5*time.Second); err != nil {
+		t.Logf("repop WaitInWorld: %v (continuing)", err)
+	}
 }
 
 // UnitInCombat reports combat flag on a unit.
@@ -180,6 +192,8 @@ func (b *ScenarioBot) CastOrGM(t *testing.T, spellID uint32, targetGUID uint64, 
 	if timeout <= 0 {
 		timeout = DefaultCastTimeout
 	}
+	// Reduce cast interrupts from leftover pad aggro.
+	MustGM(t, b.World, ".combatstop")
 	res, err := b.TryCast(t, spellID, targetGUID, timeout)
 	if err == nil && res.Success {
 		return res
@@ -190,8 +204,14 @@ func (b *ScenarioBot) CastOrGM(t *testing.T, spellID uint32, targetGUID uint64, 
 		MustGM(t, b.World, fmt.Sprintf(".cast %d", spellID))
 	} else {
 		b.CastSelfGM(t, spellID)
+		// Summon spells: also try player-as-caster `.cast N` with self selected
+		// (some cores reject `.cast self` for SUMMON effects).
+		if g := b.World.CharGUID(); g != 0 {
+			_ = b.World.SetTarget(g)
+		}
+		MustGM(t, b.World, fmt.Sprintf(".cast %d", spellID))
 	}
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 	return SpellCastResult{SpellID: spellID, Success: true}
 }
 
@@ -253,6 +273,226 @@ func (b *ScenarioBot) QuestStatusAfterSave(t *testing.T, questID uint32) (status
 func (b *ScenarioBot) Die(t *testing.T) {
 	t.Helper()
 	Die(t, b.World)
+}
+
+// DieMust ensures player Health()==0 then WaitDead.
+// Under concurrent pad load a single `.die` often no-ops (selection not applied yet,
+// god cheat, or GM thrash). Prefer DieMust over bare Die.
+//
+// Strategy (re-select self before every attempt):
+//  1. god off + combatstop (account GM perms still allow .die/.damage)
+//  2. retry `.die` / `.damage 100 pct` / absolute damage
+// Never use `.modify hp 1` — that sets max HP to 1 and can leave the bot stuck at 1/1 alive.
+func (b *ScenarioBot) DieMust(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 25 * time.Second
+	}
+	if b.World.Health() == 0 {
+		return
+	}
+	// God makes DealDamage a no-op. Prefer gm off so self is selectable and killable.
+	MustGM(t, b.World, ".cheat god off")
+	MustGM(t, b.World, ".combatstop")
+	MustGM(t, b.World, ".gm off")
+
+	deadline := time.Now().Add(timeout)
+	reselect := func() {
+		_ = b.World.SetTarget(b.GUID)
+		// Selection must be applied server-side before chat commands that require a target.
+		time.Sleep(200 * time.Millisecond)
+	}
+	waitHP0 := func(window time.Duration) bool {
+		until := time.Now().Add(window)
+		for time.Now().Before(until) && time.Now().Before(deadline) {
+			if b.World.Health() == 0 {
+				return true
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+		return b.World.Health() == 0
+	}
+
+	// Longer settle between attempts under pad thrash.
+	cmds := []string{
+		".die", ".die", ".damage 100 pct", ".damage 99999999",
+		".die", ".damage 100 pct", ".die",
+	}
+	for i, cmd := range cmds {
+		if !time.Now().Before(deadline) {
+			break
+		}
+		reselect()
+		// Account still has GM command access without GM *mode*.
+		MustGM(t, b.World, cmd)
+		if waitHP0(2*time.Second + time.Duration(i)*100*time.Millisecond) {
+			b.WaitDead(t, time.Until(deadline)+time.Second)
+			return
+		}
+	}
+	// Last attempt with gm on (some cores accept .die better that way).
+	MustGM(t, b.World, ".gm on")
+	reselect()
+	MustGM(t, b.World, ".die")
+	if waitHP0(3 * time.Second) {
+		b.WaitDead(t, time.Until(deadline)+time.Second)
+		return
+	}
+	reselect()
+	MustGM(t, b.World, ".damage 100 pct")
+	b.WaitDead(t, time.Until(deadline))
+}
+
+// WaitNear waits until the bot is within maxDist of (x,y,z).
+func (b *ScenarioBot) WaitNear(t *testing.T, x, y, z, maxDist float32, timeout time.Duration) {
+	t.Helper()
+	if maxDist <= 0 {
+		maxDist = DefaultNearPadDist
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var last float32
+	for time.Now().Before(deadline) {
+		px, py, pz, _ := b.Pos()
+		last = Distance3D(px, py, pz, x, y, z)
+		if last <= maxDist {
+			return
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	HarnessFailf(t, "%s WaitNear dist=%.2f max=%.2f timeout", b.Name, last, maxDist)
+}
+
+// WaitUnitHPKnown waits until unit has max HP > 0 in object cache.
+func (b *ScenarioBot) WaitUnitHPKnown(t *testing.T, guid uint64, timeout time.Duration) (hp, max uint32) {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		hp, max = b.UnitHP(guid)
+		if max > 0 {
+			return hp, max
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	Preconditionf(t, "unit 0x%X max HP unknown after %s", guid, timeout)
+	return 0, 0
+}
+
+// DamageToFraction damages guid until hp/max <= frac (e.g. 0.49 for below half).
+// When frac > 0, leaves at least 1 HP (never finishes the unit as "below half").
+// Caps each hit so a large .damage cannot overshoot to 0 from full.
+func (b *ScenarioBot) DamageToFraction(t *testing.T, guid uint64, frac float64, timeout time.Duration) {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	if frac < 0 {
+		frac = 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		hp, max := b.WaitUnitHPKnown(t, guid, 5*time.Second)
+		if max == 0 {
+			continue
+		}
+		if float64(hp)/float64(max) <= frac {
+			if frac > 0 && hp == 0 {
+				Preconditionf(t, "DamageToFraction: unit 0x%X died while aiming for frac<=%.2f (hp=0/%d)", guid, frac, max)
+			}
+			return
+		}
+		// Target remaining HP floor (at least 1 when frac > 0).
+		wantRemain := uint32(float64(max) * frac)
+		if frac > 0 && wantRemain < 1 {
+			wantRemain = 1
+		}
+		if hp <= wantRemain {
+			return
+		}
+		// Hit size: up to 1/5 max, but never more than (hp - wantRemain).
+		chunk := max / 5
+		if chunk < 1 {
+			chunk = 1
+		}
+		maxHit := hp - wantRemain
+		if chunk > maxHit {
+			chunk = maxHit
+		}
+		if chunk < 1 {
+			return
+		}
+		b.Damage(t, guid, chunk)
+		time.Sleep(50 * time.Millisecond)
+	}
+	hp, max := b.UnitHP(guid)
+	Preconditionf(t, "DamageToFraction: still hp=%d/%d want frac<=%.2f", hp, max, frac)
+}
+
+// HardDisconnectAndProbe closes victim without logout and probes world via probe bot.
+func HardDisconnectAndProbe(t *testing.T, victim, probe *ScenarioBot, issue int) {
+	t.Helper()
+	if victim != nil {
+		victim.HardDisconnect(t)
+	}
+	if probe == nil {
+		HarnessFailf(t, "HardDisconnectAndProbe: nil probe")
+	}
+	ProbeWorldAlive(t, probe, issue)
+}
+
+// WaitLootMethod waits until GroupState.LootMethod matches method while InGroup.
+func (b *ScenarioBot) WaitLootMethod(t *testing.T, method uint8, timeout time.Duration) client.GroupState {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var st client.GroupState
+	for time.Now().Before(deadline) {
+		st = b.GroupState()
+		if st.InGroup && st.LootMethod == method {
+			return st
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	Preconditionf(t, "WaitLootMethod want=%d got inGroup=%v method=%d", method, st.InGroup, st.LootMethod)
+	return st
+}
+
+// TryWaitChanneling returns true if channeling (optional spellID match) within timeout.
+func (b *ScenarioBot) TryWaitChanneling(t *testing.T, spellID uint32, timeout time.Duration) bool {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if b.IsChanneling() {
+			if spellID == 0 || b.ChannelSpell() == spellID {
+				return true
+			}
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	return false
+}
+
+// CancelCastWhenChanneling waits for channel then CancelCast. Returns false if never channeling.
+func (b *ScenarioBot) CancelCastWhenChanneling(t *testing.T, spellID uint32, timeout time.Duration) bool {
+	t.Helper()
+	if !b.TryWaitChanneling(t, spellID, timeout) {
+		return false
+	}
+	b.CancelCast(t)
+	return true
 }
 
 // WaitDead blocks until health is 0.
@@ -322,10 +562,15 @@ func (b *ScenarioBot) LearnAll(t *testing.T) {
 	LearnAllMyClass(t, b.World)
 }
 
-// AddQuest adds a quest via GM.
+// AddQuest adds a quest via GM and waits until character_queststatus is INCOMPLETE.
+// Bare `.quest add` is async; under pad thrash a following Save can miss the row.
 func (b *ScenarioBot) AddQuest(t *testing.T, questID uint32) {
 	t.Helper()
+	MustGM(t, b.World, ".gm on")
 	AddQuest(t, b.World, questID)
+	// Flush then poll — worldserver applies chat commands on the next tick.
+	SaveCharacter(t, b.World)
+	WaitQuestStatus(t, b.CharDB, b.GUID, questID, QuestStatusIncomplete, 10*time.Second)
 }
 
 // AssertQuestStatus saves and asserts character_queststatus.
@@ -358,10 +603,15 @@ func (b *ScenarioBot) CheatPower(t *testing.T) {
 	CheatPower(t, b.World)
 }
 
-// Spawn spawns a temp NPC and waits for it in the object cache; returns live GUID.
+// Spawn places a combat/pull fixture (training dummy, etc.) via persistent `.npc add`
+// and registers SQL+live cleanup. Returns the live client GUID.
+//
+// Not `.npc add temp`: temps are invisible to the creature table, live ~120s, and
+// select-delete cleanup races Session.Close — that is why Heroic Training Dummies piled up.
 func (b *ScenarioBot) Spawn(t *testing.T, entry uint32, timeout time.Duration) uint64 {
 	t.Helper()
-	return SpawnNPCAndWait(t, b.World, entry, timeout)
+	guid, _ := b.SpawnPersistent(t, entry, timeout)
+	return guid
 }
 
 // Face turns toward a unit GUID.
@@ -449,9 +699,19 @@ func (b *ScenarioBot) SetSkill(t *testing.T, skillID, level, max uint32) {
 }
 
 // CastSelfGM forces a self-cast via `.cast self <spell>` (bypasses client cast path).
+// Selects the player first — AC requires a selected unit for `.cast self`.
 func (b *ScenarioBot) CastSelfGM(t *testing.T, spellID uint32) {
 	t.Helper()
+	if g := b.World.CharGUID(); g != 0 {
+		_ = b.World.SetTarget(g)
+	}
 	MustGM(t, b.World, fmt.Sprintf(".cast self %d", spellID))
+}
+
+// CombatStop clears combat via GM `.combatstop` (self).
+func (b *ScenarioBot) CombatStop(t *testing.T) {
+	t.Helper()
+	MustGM(t, b.World, ".combatstop")
 }
 
 // GiveTotems adds shaman totem tools.
@@ -473,8 +733,18 @@ func (b *ScenarioBot) EnablePvP(t *testing.T) {
 func TeleportAll(t *testing.T, bots []*ScenarioBot, x, y, z float32, mapID uint32) {
 	t.Helper()
 	for _, b := range bots {
+		if b == nil {
+			continue
+		}
 		b.Teleport(t, x, y, z, mapID)
 	}
+}
+
+// TeleportAllPad teleports every bot to pad via .go xyz (same as TeleportPad per bot).
+// Prefer this over TeleportAll(..., pad.X, pad.Y, pad.Z, pad.Map).
+func TeleportAllPad(t *testing.T, bots []*ScenarioBot, pad Position3) {
+	t.Helper()
+	TeleportAll(t, bots, pad.X, pad.Y, pad.Z, pad.Map)
 }
 
 // EnableHostilePvP enables PvP on both bots (for cross-faction combat).
@@ -482,4 +752,11 @@ func EnableHostilePvP(t *testing.T, a, b *ScenarioBot) {
 	t.Helper()
 	a.EnablePvP(t)
 	b.EnablePvP(t)
+}
+
+// FormPartyWith is FormParty(leader, members...) for chained multi-bot setup.
+// Prefer package FormParty when the leader is known.
+func (b *ScenarioBot) FormPartyWith(t *testing.T, members ...*ScenarioBot) {
+	t.Helper()
+	FormParty(t, b, members...)
 }

@@ -33,6 +33,20 @@ func OpenCharDB() (*sql.DB, error) {
 	return db, nil
 }
 
+// OpenWorldDB opens the world database (acore_world) — used for spawn-id cleanup
+// of persistent `.npc add` / `.gobject add` residue.
+func OpenWorldDB() (*sql.DB, error) {
+	db, err := sql.Open("mysql", WorldDSN)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
 // EnsureAccount creates or updates an account with the given password (SRP6).
 func EnsureAccount(db *sql.DB, username, password string) error {
 	u := strings.ToUpper(username)

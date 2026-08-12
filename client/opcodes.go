@@ -58,7 +58,12 @@ func IsHighValueTraceOpcode(op uint16) bool {
 	case SmsgForceRunSpeedChange, CmsgForceRunSpeedChangeAck:
 		return true
 	// Loot (validation scripts)
-	case CmsgLoot, SmsgLootResponse, CmsgLootRelease, SmsgLootReleaseResponse:
+	case CmsgLoot, SmsgLootResponse, CmsgLootRelease, SmsgLootReleaseResponse,
+		SmsgLootStartRoll, SmsgLootRoll, SmsgLootRollWon, SmsgLootAllPassed, CmsgLootRoll, CmsgLootMasterGive:
+		return true
+	// Trade
+	case CmsgInitiateTrade, CmsgBeginTrade, CmsgAcceptTrade, CmsgCancelTrade,
+		CmsgSetTradeItem, CmsgSetTradeGold, SmsgTradeStatus:
 		return true
 	// Inventory push (charter buy, .additem, bank withdraw)
 	case SmsgItemPushResult:
@@ -146,6 +151,19 @@ var opcodeNames = map[uint16]string{
 	SmsgLootResponse:           "SMSG_LOOT_RESPONSE",
 	CmsgLootRelease:            "CMSG_LOOT_RELEASE",
 	SmsgLootReleaseResponse:    "SMSG_LOOT_RELEASE_RESPONSE",
+	SmsgLootStartRoll:          "SMSG_LOOT_START_ROLL",
+	SmsgLootRoll:               "SMSG_LOOT_ROLL",
+	SmsgLootRollWon:            "SMSG_LOOT_ROLL_WON",
+	SmsgLootAllPassed:          "SMSG_LOOT_ALL_PASSED",
+	CmsgLootRoll:               "CMSG_LOOT_ROLL",
+	CmsgLootMasterGive:         "CMSG_LOOT_MASTER_GIVE",
+	CmsgInitiateTrade:          "CMSG_INITIATE_TRADE",
+	CmsgBeginTrade:             "CMSG_BEGIN_TRADE",
+	CmsgAcceptTrade:            "CMSG_ACCEPT_TRADE",
+	CmsgCancelTrade:            "CMSG_CANCEL_TRADE",
+	CmsgSetTradeItem:           "CMSG_SET_TRADE_ITEM",
+	CmsgSetTradeGold:           "CMSG_SET_TRADE_GOLD",
+	SmsgTradeStatus:            "SMSG_TRADE_STATUS",
 	CmsgSetSelection:           "CMSG_SET_SELECTION",
 	SmsgNewWorld:               "SMSG_NEW_WORLD",
 	SmsgTransferPending:        "SMSG_TRANSFER_PENDING",

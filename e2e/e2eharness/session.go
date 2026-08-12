@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,8 +28,9 @@ type Session struct {
 	bankCh     chan *client.GuildBankList
 	moneyCh    chan int32
 	itemPushCh chan *client.ItemPushResult
-	spellCh    chan SpellCastResult
-	waitersOn  bool
+	spellCh     chan SpellCastResult
+	waitersOn   bool
+	spellHookOn bool // AddSpellCastResultHook installed once
 }
 
 // LoginOptions controls character login/create.
@@ -67,10 +69,18 @@ func LoginBot(t *testing.T, opt LoginOptions) (*Session, error) {
 	}
 	t.Logf("%s realm=%s addr=%s", opt.User, realms[0].Name, realms[0].Address)
 
+	// Guard: readLoop may outlive the test after Close; never call t.Logf then.
+	var logClosed atomic.Bool
 	logFn := func(format string, args ...interface{}) {
+		if logClosed.Load() {
+			return
+		}
 		t.Logf("[%s] "+format, append([]interface{}{opt.User}, args...)...)
 	}
 	w := client.NewWorldClient(strings.ToUpper(opt.User), auth.SessionKey(), logFn)
+	t.Cleanup(func() {
+		logClosed.Store(true)
+	})
 	// Race drives GM-command chat language (Horde cannot speak Common).
 	w.SetCharRace(opt.Race)
 
@@ -240,7 +250,8 @@ func (s *Session) installPacketWaiters() {
 		return
 	}
 	s.waitersOn = true
-	s.World.OnPacket = func(op uint16, data []byte) {
+	// Race-safe multi-subscriber registration (never clobber other OnPacket users).
+	s.World.AddPacketHook(func(op uint16, data []byte) {
 		switch op {
 		case client.SmsgPetitionSignResults:
 			if r, err := client.ParsePetitionSignResults(data); err == nil {
@@ -309,7 +320,7 @@ func (s *Session) installPacketWaiters() {
 				}
 			}
 		}
-	}
+	})
 }
 
 // warnWaiterDrop logs when a waiter channel is full and a packet is discarded.

@@ -2,6 +2,7 @@ package e2eharness
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
@@ -39,6 +40,44 @@ func HarnessFailf(t *testing.T, format string, args ...any) {
 func SoftWarnf(t *testing.T, format string, args ...any) {
 	t.Helper()
 	t.Logf("WARNING: "+format, args...)
+}
+
+// SoftPass is disabled by default: it fails the test so suites cannot greenwash
+// unjudgeable fixtures. Opt in only for temporary local debugging via
+// E2E_ALLOW_SOFT_PASS=1 (still logs SOFT-PASS for grepping).
+//
+// Prefer Preconditionf / Assertf / ConfirmedBugf instead of SoftPass in new tests.
+func SoftPass(t *testing.T, reason string, format string, args ...any) {
+	t.Helper()
+	msg := fmt.Sprintf(format, args...)
+	t.Logf("SOFT-PASS reason=%s %s", reason, msg)
+	if os.Getenv("E2E_ALLOW_SOFT_PASS") == "1" {
+		return
+	}
+	t.Fatalf("SOFT-PASS disabled (set E2E_ALLOW_SOFT_PASS=1 to allow) reason=%s %s", reason, msg)
+}
+
+// SoftPassf is SoftPass with reason taken from the format string prefix.
+func SoftPassf(t *testing.T, format string, args ...any) {
+	t.Helper()
+	SoftPass(t, "soft", format, args...)
+}
+
+// Assertf fails a post-drive behavioural oracle (not setup). Prefer over
+// Preconditionf after the scenario has already been exercised.
+func Assertf(t *testing.T, format string, args ...any) {
+	t.Helper()
+	t.Fatalf("assert: "+format, args...)
+}
+
+// AssertBugf fails a product oracle. issue must be >0; otherwise Assertf.
+func AssertBugf(t *testing.T, issue int, format string, args ...any) {
+	t.Helper()
+	if issue <= 0 {
+		Assertf(t, format, args...)
+		return
+	}
+	ConfirmedBugf(t, issue, format, args...)
 }
 
 // Require fatals as a precondition when ok is false.

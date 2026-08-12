@@ -156,16 +156,31 @@ const (
 	CmsgGroupInvite        uint16 = 0x006E
 	SmsgGroupInvite        uint16 = 0x006F
 	CmsgGroupAccept        uint16 = 0x0072
+	CmsgGroupDecline       uint16 = 0x0073
+	SmsgGroupDecline       uint16 = 0x0074
+	CmsgGroupUninvite      uint16 = 0x0075
+	CmsgGroupUninviteGuid  uint16 = 0x0076
+	SmsgGroupUninvite      uint16 = 0x0077
 	CmsgGroupSetLeader     uint16 = 0x0078
+	SmsgGroupSetLeader     uint16 = 0x0079
+	CmsgLootMethod         uint16 = 0x007A
+	CmsgGroupDisband       uint16 = 0x007B // also leave party on 3.3.5a
+	SmsgGroupDestroyed     uint16 = 0x007C
 	SmsgGroupList          uint16 = 0x007D
 	SmsgPartyCommandResult uint16 = 0x007F
+
+	// Pet opcodes
+	CmsgPetAction  uint16 = 0x0175
+	CmsgPetAbandon uint16 = 0x0176
+	SmsgPetSpells  uint16 = 0x0179
 
 	// Level up
 	SmsgLevelupInfo uint16 = 0x01D4
 
 	// Death handling
-	CmsgRepopRequest  uint16 = 0x015A
-	CmsgReclaimCorpse uint16 = 0x01D2
+	CmsgRepopRequest         uint16 = 0x015A
+	CmsgReclaimCorpse        uint16 = 0x01D2
+	SmsgCorpseReclaimDelay   uint16 = 0x0269 // uint32 delay milliseconds
 
 	// Target / selection
 	CmsgSetSelection uint16 = 0x013D
@@ -291,7 +306,14 @@ const (
 	ObjectFieldGUID          = 0x0000 // 2 uint32s
 	ObjectFieldType          = 0x0002
 	UnitFieldEntry           = 0x0003 // OBJECT_FIELD_ENTRY
+	UnitFieldCharm           = 0x0006 // OBJECT_END + 0x0000 (2 uint32s = GUID)
+	UnitFieldSummon          = 0x0008 // OBJECT_END + 0x0002 (2 uint32s = GUID) — active pet
+	UnitFieldCharmedBy       = 0x000C // OBJECT_END + 0x0006
+	UnitFieldSummonedBy      = 0x000E // OBJECT_END + 0x0008
+	UnitFieldCreatedBy       = 0x0010 // OBJECT_END + 0x000A
 	UnitFieldTarget          = 0x0012 // OBJECT_END + 0x000C = 0x0012 (2 uint32s = GUID)
+	UnitFieldChannelObject   = 0x0014 // OBJECT_END + 0x000E
+	UnitChannelSpell         = 0x0016 // OBJECT_END + 0x0010
 	UnitFieldBytes0          = 0x0017 // OBJECT_END + 0x0011 = 0x0017 (race, class, gender, powertype)
 	UnitFieldHealth          = 0x0018 // OBJECT_END + 0x0012
 	UnitFieldPower1          = 0x0019 // OBJECT_END + 0x0013 (mana/rage/energy)
@@ -306,10 +328,49 @@ const (
 	UnitDynamicFlags         = 0x004F // OBJECT_END + 0x0049
 	UnitNPCFlags             = 0x0052 // OBJECT_END + 0x004C
 
+	// UNIT_END = OBJECT_END + 0x008E = 0x94 (3.3.5a)
+	// PLAYER_FIELD_COINAGE = UNIT_END + 0x03FE
+	PlayerFieldCoinage = 0x0492
+
 	// UNIT_FIELD_AURASTATE (bitmask of aura states). Fast path hint only;
 	// authoritative aura list comes from SMSG_AURA_UPDATE* packets.
 	UnitFieldAuraState = 0x003C // OBJECT_END + 0x0036 (typical); adjust if your build differs
 )
+
+// LootMethod values for CMSG_LOOT_METHOD / SMSG_GROUP_LIST (3.3.5a).
+const (
+	LootMethodFreeForAll      uint8 = 0
+	LootMethodRoundRobin      uint8 = 1
+	LootMethodMasterLoot      uint8 = 2
+	LootMethodGroupLoot       uint8 = 3
+	LootMethodNeedBeforeGreed uint8 = 4
+)
+
+// Item quality thresholds for CMSG_LOOT_METHOD (3.3.5a ItemQualities).
+// AC rejects lootThreshold < Uncommon in HandleLootMethodOpcode.
+const (
+	ItemQualityPoor      uint8 = 0
+	ItemQualityNormal    uint8 = 1
+	ItemQualityUncommon  uint8 = 2
+	ItemQualityRare      uint8 = 3
+	ItemQualityEpic      uint8 = 4
+	ItemQualityLegendary uint8 = 5
+)
+
+// Pet command / action-bar packing (CharmInfo.h / Unit.h).
+const (
+	PetCommandStay    uint32 = 0
+	PetCommandFollow  uint32 = 1
+	PetCommandAttack  uint32 = 2
+	PetCommandAbandon uint32 = 3 // dismiss summoned pet / abandon hunter pet
+
+	PetActCommand uint8 = 0x07
+)
+
+// MakePetActionButton packs spell/action + ACT_* type into CMSG_PET_ACTION data.
+func MakePetActionButton(action uint32, actType uint8) uint32 {
+	return (action & 0x00FFFFFF) | (uint32(actType) << 24)
+}
 
 // From AC SharedDefines.h - dyn flags for dead/lootable corpses
 const (
@@ -379,12 +440,14 @@ type WorldObject struct {
 
 	// Aura state populated from SMSG_AURA_UPDATE* packets (and AURASTATE values).
 	// Protected by aurasMu. We track spell IDs only for HasAura / GetActiveAuras
-	// needs of testkit (and bot Lua). Full slot/caster/duration info can be added later.
+	// needs of testkit (and bot Lua). Stacks come from the aura update stackOrCharges byte.
 	aurasMu     sync.RWMutex
 	activeAuras map[uint32]struct{}
 	// slot -> current spellID in that aura slot. Enables correct removal when server
 	// sends spellID=0 for a previously occupied slot (SMSG_AURA_UPDATE).
 	auraSlots map[uint8]uint32
+	// slot -> stack/charges count from SMSG_AURA_UPDATE (0 treated as 1 when present).
+	auraSlotStacks map[uint8]uint8
 }
 
 // Clone returns a deep copy of the WorldObject. This gives callers (e.g. AI logic)
@@ -444,6 +507,12 @@ func (o *WorldObject) Clone() *WorldObject {
 		clone.auraSlots = make(map[uint8]uint32, len(o.auraSlots))
 		for slot, id := range o.auraSlots {
 			clone.auraSlots[slot] = id
+		}
+	}
+	if len(o.auraSlotStacks) > 0 {
+		clone.auraSlotStacks = make(map[uint8]uint8, len(o.auraSlotStacks))
+		for slot, n := range o.auraSlotStacks {
+			clone.auraSlotStacks[slot] = n
 		}
 	}
 	o.aurasMu.RUnlock()
@@ -585,6 +654,35 @@ func (o *WorldObject) HasAura(spellID uint32) bool {
 	return ok
 }
 
+// AuraStacks returns the highest stack/charges count observed for spellID on this
+// object (0 if missing). Values come from SMSG_AURA_UPDATE stackOrCharges.
+func (o *WorldObject) AuraStacks(spellID uint32) int {
+	if o == nil {
+		return 0
+	}
+	o.aurasMu.RLock()
+	defer o.aurasMu.RUnlock()
+	if o.auraSlots == nil {
+		return 0
+	}
+	max := 0
+	for slot, id := range o.auraSlots {
+		if id != spellID {
+			continue
+		}
+		s := 1
+		if o.auraSlotStacks != nil {
+			if v := int(o.auraSlotStacks[slot]); v > 0 {
+				s = v
+			}
+		}
+		if s > max {
+			max = s
+		}
+	}
+	return max
+}
+
 // GetActiveAuras returns a snapshot of active spell IDs on the object.
 func (o *WorldObject) GetActiveAuras() []uint32 {
 	if o == nil {
@@ -604,7 +702,8 @@ func (o *WorldObject) GetActiveAuras() []uint32 {
 
 // setAuraForSlot records that a slot now holds spellID (or 0 to clear the slot).
 // Maintains both the set (for fast HasAura) and the slot map (for accurate removes).
-func (o *WorldObject) setAuraForSlot(slot uint8, spellID uint32) {
+// stacks is the stackOrCharges byte from SMSG_AURA_UPDATE (ignored when spellID==0).
+func (o *WorldObject) setAuraForSlot(slot uint8, spellID uint32, stacks uint8) {
 	o.aurasMu.Lock()
 	defer o.aurasMu.Unlock()
 	if o.activeAuras == nil {
@@ -613,17 +712,50 @@ func (o *WorldObject) setAuraForSlot(slot uint8, spellID uint32) {
 	if o.auraSlots == nil {
 		o.auraSlots = make(map[uint8]uint32)
 	}
+	if o.auraSlotStacks == nil {
+		o.auraSlotStacks = make(map[uint8]uint8)
+	}
 
-	// If this slot previously held a different spell, drop the old one from the set.
+	// If this slot previously held a different spell, drop the old one from the set
+	// only when no other slot still holds it.
 	if prev, had := o.auraSlots[slot]; had && prev != 0 && prev != spellID {
-		delete(o.activeAuras, prev)
+		still := false
+		for s, id := range o.auraSlots {
+			if s != slot && id == prev {
+				still = true
+				break
+			}
+		}
+		if !still {
+			delete(o.activeAuras, prev)
+		}
 	}
 
 	if spellID == 0 {
-		delete(o.auraSlots, slot)
+		if prev, had := o.auraSlots[slot]; had && prev != 0 {
+			delete(o.auraSlots, slot)
+			delete(o.auraSlotStacks, slot)
+			still := false
+			for _, id := range o.auraSlots {
+				if id == prev {
+					still = true
+					break
+				}
+			}
+			if !still {
+				delete(o.activeAuras, prev)
+			}
+		} else {
+			delete(o.auraSlots, slot)
+			delete(o.auraSlotStacks, slot)
+		}
 		return
 	}
 	o.auraSlots[slot] = spellID
+	if stacks == 0 {
+		stacks = 1
+	}
+	o.auraSlotStacks[slot] = stacks
 	o.activeAuras[spellID] = struct{}{}
 }
 
@@ -639,6 +771,9 @@ func (o *WorldObject) removeAura(spellID uint32) {
 		for s, id := range o.auraSlots {
 			if id == spellID {
 				delete(o.auraSlots, s)
+				if o.auraSlotStacks != nil {
+					delete(o.auraSlotStacks, s)
+				}
 			}
 		}
 	}
@@ -650,6 +785,17 @@ func (o *WorldObject) clearAuras() {
 	defer o.aurasMu.Unlock()
 	o.activeAuras = nil
 	o.auraSlots = nil
+	o.auraSlotStacks = nil
+}
+
+// GUIDField reads a 2×uint32 ObjectGuid from Values at fieldIndex (low then high).
+func (o *WorldObject) GUIDField(fieldIndex uint16) uint64 {
+	if o == nil {
+		return 0
+	}
+	low := o.value(fieldIndex)
+	high := o.value(fieldIndex + 1)
+	return uint64(low) | (uint64(high) << 32)
 }
 
 // SpellCooldown tracks a spell's cooldown expiry
@@ -701,6 +847,7 @@ type WorldClient struct {
 	logoutDone chan struct{}
 
 	stopChan chan struct{}
+	stopOnce sync.Once // closes stopChan exactly once
 	stopped  bool
 
 	lastError error
@@ -738,6 +885,13 @@ type WorldClient struct {
 	power     uint32
 	maxPower  uint32
 	level     uint32
+	money     uint32 // PLAYER_FIELD_COINAGE (copper), private self updates
+
+	// SMSG_CORPSE_RECLAIM_DELAY — server sends ms until CMSG_RECLAIM_CORPSE is legal.
+	// .die self-kill sets PvP corpse (Unit::Kill with player killer) so delay is often 30s.
+	corpseReclaimMu      sync.Mutex
+	corpseReclaimDelayMs uint32
+	corpseReclaimReadyAt time.Time
 
 	// Protocol session phase (AC STATUS_* analogue for bots)
 	phaseMu             sync.RWMutex
@@ -749,7 +903,8 @@ type WorldClient struct {
 	teleportSeq         uint64 // increments on each completed self near/far teleport
 	phaseWaiters        []chan SessionPhase
 
-	// Callbacks
+	// Callbacks (legacy single-slot fields; prefer Add*Hook for race-safe multi-subscriber).
+	// invoke*Hooks still calls these after registered hooks.
 	logFunc            func(format string, args ...interface{})
 	OnCharList         func(chars []CharEnumEntry)
 	OnCharCreateResult func(data []byte)
@@ -769,12 +924,27 @@ type WorldClient struct {
 	// can approach/face on transient errors instead of marking the unit dead.
 	OnAttackReject func(r AttackReject)
 	// OnPacket is invoked for every received world opcode (before handlers).
+	// Prefer AddPacketHook for multi-subscriber waiters.
 	OnPacket func(opcode uint16, data []byte)
 	// OnPacketSend is invoked for every outbound world opcode (after build, before write).
 	OnPacketSend func(opcode uint16, data []byte)
 	// OnSpellCastResult reports SPELL_GO (success) or SPELL_FAILURE / CAST_FAILED.
 	// failReason is 0 on success; otherwise the server reason byte when available.
 	OnSpellCastResult func(spellID uint32, success bool, failReason uint8)
+
+	// Multi-subscriber hooks (see hooks.go). Protected by cbMu.
+	cbMu                 sync.RWMutex
+	hookSeq              uint64
+	packetHooks          []packetHook
+	tradeStatusHooks     []tradeStatusHook
+	lootOpenedHooks      []lootOpenedHook
+	lootStartRollHooks   []lootStartRollHook
+	lootRollHooks        []lootRollHook
+	lootRollWonHooks     []lootRollWonHook
+	lootAllPassedHooks   []lootAllPassedHook
+	spellCastResultHooks []spellCastResultHook
+	groupInviteHooks     []groupInviteHook
+	groupListHooks       []groupListHook
 	// OnServerRelocate fires when the server forcibly moves the player (charge,
 	// blink, knockback, monster-move spline on self). Bot must abort local paths
 	// or updateMovement will write pre-relocate coords back over the new pose.
@@ -786,6 +956,63 @@ type WorldClient struct {
 	// TraceLogOpcodes enables noisy console dumps of combat/spell server opcodes.
 	// Off by default; bots enable under --validation-mode --trace-packets.
 	TraceLogOpcodes bool
+
+	// Group / party state (from SMSG_GROUP_LIST / SMSG_GROUP_INVITE).
+	groupMu sync.RWMutex
+	group   GroupState
+	// OnGroupInvite fires when SMSG_GROUP_INVITE arrives (inviter name).
+	OnGroupInvite func(inviterName string, alreadyInGroup bool)
+	// OnGroupList fires after each SMSG_GROUP_LIST parse (including empty leave).
+	OnGroupList func(state GroupState)
+
+	// Trade state (SMSG_TRADE_STATUS).
+	tradeMu         sync.RWMutex
+	tradeOpen       bool
+	lastTradeStatus TradeStatusInfo
+	// OnTradeStatus fires for every SMSG_TRADE_STATUS.
+	OnTradeStatus func(info TradeStatusInfo)
+
+	// Group loot rolls (SMSG_LOOT_START_ROLL / WON / ALL_PASSED).
+	lootRollMu  sync.RWMutex
+	activeRolls []LootStartRoll
+	// OnLootStartRoll fires when a new group roll window opens.
+	OnLootStartRoll func(r LootStartRoll)
+	// OnLootRoll fires when any member votes.
+	OnLootRoll func(r LootRollEvent)
+	// OnLootRollWon fires when a roll is awarded.
+	OnLootRollWon func(r LootRollWon)
+	// OnLootAllPassed fires when everyone passes.
+	OnLootAllPassed func(r LootAllPassed)
+}
+
+// GroupMember is one other party member from SMSG_GROUP_LIST (self is omitted).
+type GroupMember struct {
+	Name     string
+	GUID     uint64
+	Online   uint8
+	SubGroup uint8
+	Flags    uint8
+	Roles    uint8
+}
+
+// GroupState is the last SMSG_GROUP_LIST snapshot for this client.
+// InGroup is false when the server sent the empty destroyed-list form
+// (memberCount==0 and leaderGUID==0) or after SMSG_GROUP_DESTROYED.
+type GroupState struct {
+	InGroup     bool
+	GroupType   uint8
+	OwnSubGroup uint8
+	OwnFlags    uint8
+	OwnRoles    uint8
+	GroupGUID   uint64
+	Counter     uint32
+	// MemberCount is total party size including self (derived: otherMembers+1 when InGroup).
+	MemberCount int
+	Members     []GroupMember // other members only
+	LeaderGUID  uint64
+	LootMethod  uint8
+	LootMaster  uint64
+	LootThresh  uint8
 }
 
 // NewWorldClient creates a world client
@@ -970,13 +1197,14 @@ func (w *WorldClient) setupEncryption() {
 	w.encrypted = true
 }
 
+func (w *WorldClient) signalStop() {
+	w.stopOnce.Do(func() {
+		close(w.stopChan)
+	})
+}
+
 func (w *WorldClient) readLoop() {
-	defer func() {
-		if !w.stopped {
-			w.stopped = true
-			close(w.stopChan)
-		}
-	}()
+	defer w.signalStop()
 
 	for {
 		opcode, data, err := w.readPacket()
@@ -1148,10 +1376,8 @@ func (w *WorldClient) sendPacket(opcode uint16, data []byte) error {
 }
 
 func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
-	// Generic callback for raw packet access
-	if w.OnPacket != nil {
-		w.OnPacket(opcode, data)
-	}
+	// Multi-subscriber hooks + legacy OnPacket (see hooks.go / AddPacketHook).
+	w.invokePacketHooks(opcode, data)
 
 	// Console hex dumps are opt-in (TraceLogOpcodes). Default off to avoid drowning
 	// load tests; validation timeline uses OnPacket JSONL instead.
@@ -1257,6 +1483,18 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 	// Loot
 	case SmsgLootResponse:
 		w.handleLootResponse(data)
+	case SmsgLootStartRoll:
+		w.handleLootStartRoll(data)
+	case SmsgLootRoll:
+		w.handleLootRoll(data)
+	case SmsgLootRollWon:
+		w.handleLootRollWon(data)
+	case SmsgLootAllPassed:
+		w.handleLootAllPassed(data)
+
+	// Trade
+	case SmsgTradeStatus:
+		w.handleTradeStatus(data)
 
 	// Chat
 	case SmsgMessageChat:
@@ -1269,6 +1507,18 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 	// Power
 	case SmsgPowerUpdate:
 		w.handlePowerUpdate(data)
+
+	// Group / party
+	case SmsgGroupInvite:
+		w.handleGroupInvite(data)
+	case SmsgGroupList:
+		w.handleGroupList(data)
+	case SmsgGroupDestroyed:
+		w.handleGroupDestroyed()
+
+	// Death / corpse
+	case SmsgCorpseReclaimDelay:
+		w.handleCorpseReclaimDelay(data)
 
 	case SmsgNewWorld:
 		w.handleNewWorld(data)
@@ -1448,6 +1698,7 @@ func (w *WorldClient) handleLogoutComplete() {
 	default:
 		close(w.logoutDone)
 	}
+	w.signalStop()
 }
 
 // Public methods for bot actions
@@ -1819,15 +2070,106 @@ func (w *WorldClient) ReclaimCorpse() error {
 	return w.sendPacket(CmsgReclaimCorpse, buf.Bytes())
 }
 
-// Close closes the connection and unblocks any pending reads.
-func (w *WorldClient) Close() {
+func (w *WorldClient) handleCorpseReclaimDelay(data []byte) {
+	if len(data) < 4 {
+		return
+	}
+	delayMs := binary.LittleEndian.Uint32(data[0:4])
+	w.corpseReclaimMu.Lock()
+	w.corpseReclaimDelayMs = delayMs
+	w.corpseReclaimReadyAt = time.Now().Add(time.Duration(delayMs) * time.Millisecond)
+	w.corpseReclaimMu.Unlock()
+	// Protocol oracle: KillPlayer / BuildPlayerRepop only send this while dead.
+	// Some GM kill paths omit a timely UNIT_FIELD_HEALTH=0 self-update; force local HP
+	// so DieMust / WaitDead do not spin while the server already treats us as a corpse.
+	w.statsMu.Lock()
+	if w.health > 0 {
+		w.health = 0
+		w.statsMu.Unlock()
+		w.log("SMSG_CORPSE_RECLAIM_DELAY delay_ms=%d ready_in=%s (forced HP=0)", delayMs, time.Duration(delayMs)*time.Millisecond)
+		if w.OnDeath != nil {
+			w.OnDeath()
+		}
+		return
+	}
+	w.statsMu.Unlock()
+	w.log("SMSG_CORPSE_RECLAIM_DELAY delay_ms=%d ready_in=%s", delayMs, time.Duration(delayMs)*time.Millisecond)
+}
+
+// CorpseReclaimDelayMs returns the last SMSG_CORPSE_RECLAIM_DELAY value (0 if none).
+func (w *WorldClient) CorpseReclaimDelayMs() uint32 {
+	w.corpseReclaimMu.Lock()
+	defer w.corpseReclaimMu.Unlock()
+	return w.corpseReclaimDelayMs
+}
+
+// WaitCorpseReclaimAllowed blocks until the server reclaim delay from the last
+// SMSG_CORPSE_RECLAIM_DELAY has elapsed (or timeout). If no delay packet arrived,
+// returns immediately (PvE delay often 0 and may omit a long wait).
+// Does not teleport or reclaim — Arm → Wait delay → Tele → WaitNear → Reclaim.
+func (w *WorldClient) WaitCorpseReclaimAllowed(timeout time.Duration) error {
+	if timeout <= 0 {
+		timeout = 35 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	// Brief wait for the delay packet after death/repop (BuildPlayerRepop).
+	packetDeadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(packetDeadline) {
+		w.corpseReclaimMu.Lock()
+		ready := w.corpseReclaimReadyAt
+		delay := w.corpseReclaimDelayMs
+		w.corpseReclaimMu.Unlock()
+		if !ready.IsZero() || delay > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	w.corpseReclaimMu.Lock()
+	readyAt := w.corpseReclaimReadyAt
+	delayMs := w.corpseReclaimDelayMs
+	w.corpseReclaimMu.Unlock()
+	if readyAt.IsZero() {
+		// No packet — assume reclaim is allowed now (typical PvE with delay disabled).
+		w.log("WaitCorpseReclaimAllowed: no SMSG_CORPSE_RECLAIM_DELAY seen (assuming ready)")
+		return nil
+	}
+	wait := time.Until(readyAt)
+	if wait <= 0 {
+		return nil
+	}
+	if time.Now().Add(wait).After(deadline) {
+		return fmt.Errorf("corpse reclaim delay %dms exceeds remaining timeout", delayMs)
+	}
+	w.log("WaitCorpseReclaimAllowed: sleeping %s (server delay_ms=%d)", wait, delayMs)
+	time.Sleep(wait)
+	return nil
+}
+
+// IsStopped reports whether Close/Stop has been called (socket no longer usable).
+// Prefer this over session phase for cleanup paths — phase can lag a closed conn.
+func (w *WorldClient) IsStopped() bool {
+	if w == nil {
+		return true
+	}
 	w.sendMu.Lock()
 	defer w.sendMu.Unlock()
+	return w.stopped || w.conn == nil
+}
+
+// Close closes the connection and unblocks any pending reads.
+// Always signals stopChan (once) so waiters wake on hard disconnect.
+func (w *WorldClient) Close() {
+	w.sendMu.Lock()
 	w.stopped = true
+	// Drop t.Logf-backed logger first so late readLoop packets cannot panic with
+	// "Log in goroutine after TestX has completed" after t.Cleanup runs.
+	w.logFunc = nil
 	if w.conn != nil {
 		// Closing the conn will unblock any ReadFull in readPacket/readLoop.
 		_ = w.conn.Close()
 	}
+	w.sendMu.Unlock()
+	w.signalStop()
 }
 
 // StopChan returns the channel that is closed when the connection stops
@@ -1838,14 +2180,22 @@ func (w *WorldClient) StopChan() <-chan struct{} {
 // Stop requests the client to stop. It also closes the underlying connection
 // so that a blocked readPacket/readLoop unblocks promptly.
 func (w *WorldClient) Stop() {
-	w.stopped = true
 	w.Close()
 }
 
 func (w *WorldClient) log(format string, args ...interface{}) {
-	if w.logFunc != nil {
-		w.logFunc(format, args...)
+	// Snapshot under sendMu so Close can nil logFunc without racing t.Logf
+	// after the test finishes (see vehicles relog flake).
+	w.sendMu.Lock()
+	fn := w.logFunc
+	w.sendMu.Unlock()
+	if fn == nil {
+		return
 	}
+	// Late readLoop packets can still hold a pre-Close snapshot of t.Logf after
+	// the test framework marks the test done — swallow that panic only.
+	defer func() { _ = recover() }()
+	fn(format, args...)
 }
 
 func getMSTime() uint32 {
@@ -2089,10 +2439,13 @@ func (w *WorldClient) Teleport(mapID uint32, x, y, z, o float32) error {
 	return w.SendGMCommand(cmd)
 }
 
-// GroupInvite sends CMSG_GROUP_INVITE to invite a player by name
+// GroupInvite sends CMSG_GROUP_INVITE to invite a player by name.
+// 3.3.5a / AC layout: null-terminated name + uint32 (unk, always 0).
+// Omitting the uint32 can cause HandleGroupInviteOpcode to short-read and drop the invite.
 func (w *WorldClient) GroupInvite(playerName string) error {
 	buf := new(bytes.Buffer)
 	buf.Write(append([]byte(playerName), 0))
+	_ = binary.Write(buf, binary.LittleEndian, uint32(0))
 	return w.sendPacket(CmsgGroupInvite, buf.Bytes())
 }
 
@@ -2101,6 +2454,303 @@ func (w *WorldClient) GroupAccept() error {
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, uint32(0))
 	return w.sendPacket(CmsgGroupAccept, buf.Bytes())
+}
+
+// GroupDecline sends CMSG_GROUP_DECLINE (empty body on 3.3.5a).
+func (w *WorldClient) GroupDecline() error {
+	return w.sendPacket(CmsgGroupDecline, nil)
+}
+
+// GroupLeave sends CMSG_GROUP_DISBAND, which on 3.3.5a leaves the party
+// (and disbands when the last/leader path dissolves the group).
+func (w *WorldClient) GroupLeave() error {
+	return w.sendPacket(CmsgGroupDisband, nil)
+}
+
+// GroupDisband is an alias of GroupLeave (same client opcode).
+func (w *WorldClient) GroupDisband() error {
+	return w.GroupLeave()
+}
+
+// GroupSetLeader sends CMSG_GROUP_SET_LEADER for the given player GUID.
+func (w *WorldClient) GroupSetLeader(playerGUID uint64) error {
+	buf := new(bytes.Buffer)
+	_ = binary.Write(buf, binary.LittleEndian, playerGUID)
+	return w.sendPacket(CmsgGroupSetLeader, buf.Bytes())
+}
+
+// GroupUninvite sends CMSG_GROUP_UNINVITE by character name (kick / cancel invite).
+func (w *WorldClient) GroupUninvite(memberName string) error {
+	buf := new(bytes.Buffer)
+	buf.Write(append([]byte(memberName), 0))
+	return w.sendPacket(CmsgGroupUninvite, buf.Bytes())
+}
+
+// GroupUninviteGUID sends CMSG_GROUP_UNINVITE_GUID.
+func (w *WorldClient) GroupUninviteGUID(memberGUID uint64, reason string) error {
+	buf := new(bytes.Buffer)
+	_ = binary.Write(buf, binary.LittleEndian, memberGUID)
+	buf.Write(append([]byte(reason), 0))
+	return w.sendPacket(CmsgGroupUninviteGuid, buf.Bytes())
+}
+
+// SetLootMethod sends CMSG_LOOT_METHOD (leader only).
+// method: LootMethod* constants; lootMaster used for master loot (else 0);
+// threshold is item quality threshold (e.g. 2 = uncommon).
+func (w *WorldClient) SetLootMethod(method uint8, lootMaster uint64, threshold uint8) error {
+	buf := new(bytes.Buffer)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(method))
+	_ = binary.Write(buf, binary.LittleEndian, lootMaster)
+	_ = binary.Write(buf, binary.LittleEndian, uint32(threshold))
+	return w.sendPacket(CmsgLootMethod, buf.Bytes())
+}
+
+// GroupState returns a snapshot of the last SMSG_GROUP_LIST state.
+func (w *WorldClient) GroupState() GroupState {
+	w.groupMu.RLock()
+	defer w.groupMu.RUnlock()
+	return cloneGroupState(w.group)
+}
+
+// InGroup reports whether the last group list indicated membership.
+func (w *WorldClient) InGroup() bool {
+	w.groupMu.RLock()
+	defer w.groupMu.RUnlock()
+	return w.group.InGroup
+}
+
+// IsGroupLeader reports whether charGUID matches the last list's leader GUID.
+func (w *WorldClient) IsGroupLeader() bool {
+	w.groupMu.RLock()
+	defer w.groupMu.RUnlock()
+	return w.group.InGroup && w.group.LeaderGUID != 0 && w.group.LeaderGUID == w.charGUID
+}
+
+// GroupMembers returns other members from the last SMSG_GROUP_LIST (not including self).
+func (w *WorldClient) GroupMembers() []GroupMember {
+	w.groupMu.RLock()
+	defer w.groupMu.RUnlock()
+	if len(w.group.Members) == 0 {
+		return nil
+	}
+	out := make([]GroupMember, len(w.group.Members))
+	copy(out, w.group.Members)
+	return out
+}
+
+func cloneGroupState(s GroupState) GroupState {
+	out := s
+	if len(s.Members) > 0 {
+		out.Members = make([]GroupMember, len(s.Members))
+		copy(out.Members, s.Members)
+	}
+	return out
+}
+
+// handleGroupInvite parses SMSG_GROUP_INVITE (invited flag + inviter name + padding).
+func (w *WorldClient) handleGroupInvite(data []byte) {
+	if len(data) < 2 {
+		return
+	}
+	already := data[0] != 0
+	// name is null-terminated after the flag byte
+	nameBytes := data[1:]
+	end := bytes.IndexByte(nameBytes, 0)
+	name := ""
+	if end >= 0 {
+		name = string(nameBytes[:end])
+	} else {
+		name = string(nameBytes)
+	}
+	w.invokeGroupInviteHooks(name, already)
+}
+
+// ParseGroupList parses SMSG_GROUP_LIST into GroupState (exported for unit tests).
+func ParseGroupList(data []byte) (GroupState, error) {
+	var st GroupState
+	if len(data) < 4 {
+		return st, fmt.Errorf("group list too short")
+	}
+	r := bytes.NewReader(data)
+	_ = binary.Read(r, binary.LittleEndian, &st.GroupType)
+	_ = binary.Read(r, binary.LittleEndian, &st.OwnSubGroup)
+	_ = binary.Read(r, binary.LittleEndian, &st.OwnFlags)
+	_ = binary.Read(r, binary.LittleEndian, &st.OwnRoles)
+	// Optional LFG block: when group type has LFG bit (0x08) AC writes 1+4 more bytes.
+	if st.GroupType&0x08 != 0 {
+		var lfgStatus uint8
+		var dungeon uint32
+		if err := binary.Read(r, binary.LittleEndian, &lfgStatus); err != nil {
+			return st, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &dungeon); err != nil {
+			return st, err
+		}
+	}
+	if err := binary.Read(r, binary.LittleEndian, &st.GroupGUID); err != nil {
+		return st, err
+	}
+	if err := binary.Read(r, binary.LittleEndian, &st.Counter); err != nil {
+		return st, err
+	}
+	var otherCount uint32
+	if err := binary.Read(r, binary.LittleEndian, &otherCount); err != nil {
+		return st, err
+	}
+	st.Members = make([]GroupMember, 0, otherCount)
+	for i := uint32(0); i < otherCount; i++ {
+		name := readCString(r)
+		var m GroupMember
+		m.Name = name
+		if err := binary.Read(r, binary.LittleEndian, &m.GUID); err != nil {
+			return st, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &m.Online); err != nil {
+			return st, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &m.SubGroup); err != nil {
+			return st, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &m.Flags); err != nil {
+			return st, err
+		}
+		if err := binary.Read(r, binary.LittleEndian, &m.Roles); err != nil {
+			return st, err
+		}
+		st.Members = append(st.Members, m)
+	}
+	if err := binary.Read(r, binary.LittleEndian, &st.LeaderGUID); err != nil {
+		return st, err
+	}
+	// Empty leave form: otherCount==0 and leader may be 0 (destroyed list).
+	if otherCount == 0 && st.LeaderGUID == 0 {
+		st.InGroup = false
+		st.MemberCount = 0
+		return st, nil
+	}
+	st.InGroup = true
+	st.MemberCount = int(otherCount) + 1
+	if otherCount > 0 {
+		_ = binary.Read(r, binary.LittleEndian, &st.LootMethod)
+		_ = binary.Read(r, binary.LittleEndian, &st.LootMaster)
+		_ = binary.Read(r, binary.LittleEndian, &st.LootThresh)
+		// dungeon/raid difficulty bytes ignored
+	}
+	return st, nil
+}
+
+func (w *WorldClient) handleGroupList(data []byte) {
+	st, err := ParseGroupList(data)
+	if err != nil {
+		w.log("SMSG_GROUP_LIST parse: %v", err)
+		return
+	}
+	w.groupMu.Lock()
+	w.group = st
+	w.groupMu.Unlock()
+	w.invokeGroupListHooks(cloneGroupState(st))
+}
+
+func (w *WorldClient) handleGroupDestroyed() {
+	w.groupMu.Lock()
+	w.group = GroupState{}
+	w.groupMu.Unlock()
+	w.invokeGroupListHooks(GroupState{})
+}
+
+// Money returns player copper from PLAYER_FIELD_COINAGE (0 if not yet seen).
+func (w *WorldClient) Money() uint32 {
+	w.statsMu.RLock()
+	defer w.statsMu.RUnlock()
+	return w.money
+}
+
+// SelfAuraStacks returns stack count for spellID on the player (0 if absent).
+func (w *WorldClient) SelfAuraStacks(spellID uint32) int {
+	obj := w.GetObject(w.CharGUID())
+	if obj == nil {
+		return 0
+	}
+	return obj.AuraStacks(spellID)
+}
+
+// ChannelSpell returns UNIT_CHANNEL_SPELL on the player (0 if not channeling).
+func (w *WorldClient) ChannelSpell() uint32 {
+	obj := w.GetObject(w.CharGUID())
+	if obj == nil {
+		return 0
+	}
+	return obj.Value(UnitChannelSpell)
+}
+
+// IsChanneling reports non-zero UNIT_CHANNEL_SPELL on the player.
+func (w *WorldClient) IsChanneling() bool {
+	return w.ChannelSpell() != 0
+}
+
+// UnitChannelSpell returns UNIT_CHANNEL_SPELL for any tracked unit.
+func (w *WorldClient) UnitChannelSpell(guid uint64) uint32 {
+	obj := w.GetObject(guid)
+	if obj == nil {
+		return 0
+	}
+	return obj.Value(UnitChannelSpell)
+}
+
+// PlayerPetGUID returns UNIT_FIELD_SUMMON on the player object (0 if none).
+func (w *WorldClient) PlayerPetGUID() uint64 {
+	obj := w.GetObject(w.CharGUID())
+	if obj == nil {
+		return 0
+	}
+	return obj.GUIDField(UnitFieldSummon)
+}
+
+// CancelAura sends CMSG_CANCEL_AURA for spellID.
+func (w *WorldClient) CancelAura(spellID uint32) error {
+	buf := new(bytes.Buffer)
+	_ = binary.Write(buf, binary.LittleEndian, spellID)
+	return w.sendPacket(CmsgCancelAura, buf.Bytes())
+}
+
+// CancelCast sends CMSG_CANCEL_CAST (optional cast count; 0 is fine).
+func (w *WorldClient) CancelCast() error {
+	buf := new(bytes.Buffer)
+	_ = binary.Write(buf, binary.LittleEndian, uint8(0))
+	return w.sendPacket(CmsgCancelCast, buf.Bytes())
+}
+
+// PetAction sends CMSG_PET_ACTION (petGUID, packed action, targetGUID).
+func (w *WorldClient) PetAction(petGUID uint64, actionData uint32, targetGUID uint64) error {
+	buf := new(bytes.Buffer)
+	_ = binary.Write(buf, binary.LittleEndian, petGUID)
+	_ = binary.Write(buf, binary.LittleEndian, actionData)
+	_ = binary.Write(buf, binary.LittleEndian, targetGUID)
+	return w.sendPacket(CmsgPetAction, buf.Bytes())
+}
+
+// DismissPet sends pet COMMAND_ABANDON via CMSG_PET_ACTION (works for summon dismiss).
+func (w *WorldClient) DismissPet(petGUID uint64) error {
+	if petGUID == 0 {
+		petGUID = w.PlayerPetGUID()
+	}
+	if petGUID == 0 {
+		return fmt.Errorf("no pet guid")
+	}
+	data := MakePetActionButton(PetCommandAbandon, PetActCommand)
+	return w.PetAction(petGUID, data, 0)
+}
+
+// PetAttackCommand commands the pet to attack targetGUID.
+func (w *WorldClient) PetAttackCommand(petGUID, targetGUID uint64) error {
+	if petGUID == 0 {
+		petGUID = w.PlayerPetGUID()
+	}
+	if petGUID == 0 {
+		return fmt.Errorf("no pet guid")
+	}
+	data := MakePetActionButton(PetCommandAttack, PetActCommand)
+	return w.PetAction(petGUID, data, targetGUID)
 }
 
 // NameQuery sends CMSG_NAME_QUERY to look up a player name
@@ -2876,9 +3526,7 @@ func (w *WorldClient) handleSpellGo(data []byte) {
 	binary.Read(r, binary.LittleEndian, &spellID)
 
 	if casterGUID == w.charGUID {
-		if w.OnSpellCastResult != nil {
-			w.OnSpellCastResult(spellID, true, 0)
-		}
+		w.invokeSpellCastResultHooks(spellID, true, 0)
 	}
 }
 
@@ -2897,9 +3545,7 @@ func (w *WorldClient) handleSpellFailure(data []byte) {
 
 	if casterGUID == w.charGUID {
 		w.log("Spell %d FAILED (reason=%d)", spellID, reason)
-		if w.OnSpellCastResult != nil {
-			w.OnSpellCastResult(spellID, false, reason)
-		}
+		w.invokeSpellCastResultHooks(spellID, false, reason)
 	}
 }
 
@@ -2913,9 +3559,7 @@ func (w *WorldClient) handleCastFailed(data []byte) {
 	spellID := binary.LittleEndian.Uint32(data[1:5])
 	reason := data[5]
 	w.log("SMSG_CAST_FAILED spell=%d reason=%d castCount=%d", spellID, reason, castCount)
-	if w.OnSpellCastResult != nil {
-		w.OnSpellCastResult(spellID, false, reason)
-	}
+	w.invokeSpellCastResultHooks(spellID, false, reason)
 }
 
 func (w *WorldClient) handleSpellCooldown(data []byte) {
@@ -3003,40 +3647,40 @@ const (
 //	  [if !(flags & AFLAG_CASTER)] packed caster GUID
 //	  [if flags & AFLAG_DURATION]  uint32 maxDuration, uint32 duration
 //	  [if flags & AFLAG_ANY_EFFECT_AMOUNT_SENT] int32 amount per effect bit
-func parseAuraSlotUpdate(r *bytes.Reader) (slot uint8, spellID uint32, ok bool) {
+func parseAuraSlotUpdate(r *bytes.Reader) (slot uint8, spellID uint32, stacks uint8, ok bool) {
 	if err := binary.Read(r, binary.LittleEndian, &slot); err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	if err := binary.Read(r, binary.LittleEndian, &spellID); err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	if spellID == 0 {
 		// Remove: packet ends after spellId 0 (no flags/header).
-		return slot, 0, true
+		return slot, 0, 0, true
 	}
 	var flags, casterLevel, stackOrCharges uint8
 	if err := binary.Read(r, binary.LittleEndian, &flags); err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	if err := binary.Read(r, binary.LittleEndian, &casterLevel); err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	if err := binary.Read(r, binary.LittleEndian, &stackOrCharges); err != nil {
-		return 0, 0, false
+		return 0, 0, 0, false
 	}
 	// Caster GUID is omitted only when AFLAG_CASTER is set (self-cast).
 	if flags&auraFlagCaster == 0 {
 		if _, err := readPackedGUID(r); err != nil {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 	}
 	if flags&auraFlagDuration != 0 {
 		var maxDur, dur uint32
 		if err := binary.Read(r, binary.LittleEndian, &maxDur); err != nil {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 		if err := binary.Read(r, binary.LittleEndian, &dur); err != nil {
-			return 0, 0, false
+			return 0, 0, 0, false
 		}
 	}
 	// Effect amounts (int32 each) when AFLAG_ANY_EFFECT_AMOUNT_SENT + effect index bits.
@@ -3047,11 +3691,11 @@ func parseAuraSlotUpdate(r *bytes.Reader) (slot uint8, spellID uint32, ok bool) 
 			}
 			var amount int32
 			if err := binary.Read(r, binary.LittleEndian, &amount); err != nil {
-				return 0, 0, false
+				return 0, 0, 0, false
 			}
 		}
 	}
-	return slot, spellID, true
+	return slot, spellID, stackOrCharges, true
 }
 
 // handleAuraUpdate handles SMSG_AURA_UPDATE (incremental single-target aura slot updates).
@@ -3064,11 +3708,11 @@ func (w *WorldClient) handleAuraUpdate(data []byte) {
 	obj := w.getOrCreateObject(targetGUID)
 
 	for {
-		slot, spellID, ok := parseAuraSlotUpdate(r)
+		slot, spellID, stacks, ok := parseAuraSlotUpdate(r)
 		if !ok {
 			break
 		}
-		obj.setAuraForSlot(slot, spellID)
+		obj.setAuraForSlot(slot, spellID, stacks)
 		if w.OnObjectUpdate != nil {
 			w.OnObjectUpdate(targetGUID, obj.Clone())
 		}
@@ -3086,12 +3730,12 @@ func (w *WorldClient) handleAuraUpdateAll(data []byte) {
 	obj.clearAuras()
 
 	for {
-		slot, spellID, ok := parseAuraSlotUpdate(r)
+		slot, spellID, stacks, ok := parseAuraSlotUpdate(r)
 		if !ok {
 			break
 		}
 		if spellID != 0 {
-			obj.setAuraForSlot(slot, spellID)
+			obj.setAuraForSlot(slot, spellID, stacks)
 		}
 	}
 
@@ -3129,9 +3773,7 @@ func (w *WorldClient) handleLootResponse(data []byte) {
 		items = append(items, item)
 	}
 
-	if w.OnLootOpened != nil {
-		w.OnLootOpened(lootGUID, items)
-	}
+	w.invokeLootOpenedHooks(lootGUID, items)
 }
 
 func (w *WorldClient) handleChatMessage(data []byte) {
@@ -3854,6 +4496,12 @@ func (w *WorldClient) readValuesUpdate(r *bytes.Reader, guid uint64) {
 					if guid == w.charGUID {
 						w.statsMu.Lock()
 						w.level = value
+						w.statsMu.Unlock()
+					}
+				case PlayerFieldCoinage:
+					if guid == w.charGUID {
+						w.statsMu.Lock()
+						w.money = value
 						w.statsMu.Unlock()
 					}
 				case UnitFieldAuraState:

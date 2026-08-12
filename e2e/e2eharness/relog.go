@@ -3,11 +3,54 @@ package e2eharness
 import (
 	"testing"
 	"time"
+
+	"github.com/walkline/AzerothGhost/client"
 )
+
+// DefaultInWorldTimeout is used by WaitInWorld when timeout <= 0.
+const DefaultInWorldTimeout = 30 * time.Second
+
+// WaitInWorld blocks until the bot is in PhaseInWorld (gameplay-ready).
+// Use after Relog, far .tele / map transfer, or any path that may leave the
+// session in PhaseFarTransfer / PhaseNearTeleport / PhaseLoading.
+// Prefer this over fixed sleeps after login or teleport.
+func (b *ScenarioBot) WaitInWorld(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	if b == nil || b.World == nil {
+		HarnessFailf(t, "WaitInWorld: nil bot/world")
+	}
+	if timeout <= 0 {
+		timeout = DefaultInWorldTimeout
+	}
+	if b.World.IsInWorld() {
+		return
+	}
+	if err := b.World.WaitForSessionPhase(client.PhaseInWorld, timeout); err != nil {
+		HarnessFailf(t, "%s: WaitInWorld: %v (phase=%s)", b.Name, err, b.World.SessionPhase())
+	}
+}
+
+// WaitInWorld is the package-level helper for a bare WorldClient.
+func WaitInWorld(t *testing.T, w *client.WorldClient, timeout time.Duration) {
+	t.Helper()
+	if w == nil {
+		HarnessFailf(t, "WaitInWorld: nil world")
+	}
+	if timeout <= 0 {
+		timeout = DefaultInWorldTimeout
+	}
+	if w.IsInWorld() {
+		return
+	}
+	if err := w.WaitForSessionPhase(client.PhaseInWorld, timeout); err != nil {
+		HarnessFailf(t, "WaitInWorld: %v (phase=%s)", err, w.SessionPhase())
+	}
+}
 
 // Relog logs the bot out of the world and back in on the same account/character.
 // Rebinds b.Session fields; keeps AuthDB, CharDB, Ident, Role.
 // Registers the new session with t.Cleanup via LoginBots.
+// Waits until the new session is PhaseInWorld before returning.
 //
 // The old session is Closed; do not use the previous *Session pointer afterward
 // (the ScenarioBot pointer itself is updated in place).
@@ -51,5 +94,37 @@ func (b *ScenarioBot) Relog(t *testing.T) {
 	if s.GUID != oldGUID && s.GUID != 0 && oldGUID != 0 {
 		t.Logf("WARNING: relog GUID 0x%X != original 0x%X", s.GUID, oldGUID)
 	}
-	t.Logf("relogged %s char=%s guid=0x%X", account, charName, s.GUID)
+	// LoginBots already waits for login; re-assert PhaseInWorld for authors.
+	b.WaitInWorld(t, DefaultInWorldTimeout)
+	t.Logf("relogged %s char=%s guid=0x%X phase=%s", account, charName, s.GUID, b.World.SessionPhase())
+}
+
+// HardDisconnect forcibly closes the world socket without CMSG_LOGOUT_REQUEST /
+// WaitForLogout. Use for crash / "session drop" probes (charm logout, vehicle
+// passenger disconnect, SESS hard-drop). Prefer Relog for graceful logout+reenter.
+//
+// Semantics:
+//   - No logout packet is sent — server sees an abrupt TCP drop.
+//   - The bot's Session is unusable afterward (do not Cast/GM on it).
+//   - Probe world health with a *different* bot via ProbeWorldAlive / AssertWorldAlive.
+//
+// CloseHard is an alias with the same no-logout semantics.
+func (b *ScenarioBot) HardDisconnect(t *testing.T) {
+	t.Helper()
+	if b == nil || b.Session == nil {
+		return
+	}
+	name := b.Name
+	if name == "" {
+		name = b.Ident.CharName
+	}
+	t.Logf("%s HardDisconnect (socket close, no logout packet)", name)
+	b.Session.Close()
+}
+
+// CloseHard is HardDisconnect — explicit name for authors comparing graceful Close paths.
+// Does NOT send logout; see HardDisconnect.
+func (b *ScenarioBot) CloseHard(t *testing.T) {
+	t.Helper()
+	b.HardDisconnect(t)
 }

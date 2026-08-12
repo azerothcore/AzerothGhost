@@ -41,14 +41,19 @@ const (
 	SpellCharge               = 100   // Charge (warrior)
 	SpellIntercept            = 20252 // Intercept
 	SpellBattleStance         = 2457
+	SpellTaunt                = 355 // Taunt (warrior) — threat multi-bot
 	SpellSweepingStrikes      = 12328
 	SpellExecute              = 5308
 	SpellRaiseDead            = 46584 // DK Raise Dead
 	SpellBloodStrike          = 45902
 	SpellBloodTap             = 45529
+	SpellDismissPet           = 2641 // Dismiss Pet (hunter/warlock fallback)
 	SpellGroundingTotem       = 8177
 	SpellGroundingTotemEffect = 8178 // aura on the totem (consumed wrongly by AoE)
-	SpellRainOfFire           = 5740
+	SpellRainOfFire           = 5740  // rank 1; prefer SpellRainOfFireMax after learn-all
+	SpellRainOfFireMax        = 47820 // Rain of Fire rank 7 (WotLK)
+	SpellHellfire             = 1949  // warlock self-channel (reliable CancelCast probe)
+	SpellHellfireMax          = 47823 // Hellfire rank 5 (WotLK)
 	SpellBlendingInAura       = 45614 // Imbued Scourge Shroud effect
 	SpellSummonTargetDummy    = 4071  // Target Dummy (engineering item spell)
 	SpellSummonAdvDummy       = 4072  // Advanced Target Dummy
@@ -63,12 +68,13 @@ const (
 	ItemCorpseDust          = 37201 // Raise Dead reagent
 
 	// Creatures
-	CreatureTargetDummy       = 2673
-	CreatureAdvTargetDummy    = 2674
-	CreatureMasterTargetDummy = 12426
-	CreatureKologarn          = 32930
-	CreatureYorusBarleybrew   = 6166 // Rethban Gauntlet related
-	CreatureGroundingTotem    = 5925
+	CreatureTargetDummy         = 2673  // L1 low-HP; L80 autoattack often oneshots before combat flag
+	CreatureAdvTargetDummy      = 2674
+	CreatureMasterTargetDummy   = 12426
+	CreatureHeroicTrainingDummy = 31146 // L83 high HealthModifier; stable Engage target
+	CreatureKologarn            = 32930
+	CreatureYorusBarleybrew     = 6166 // Rethban Gauntlet related
+	CreatureGroundingTotem      = 5925
 
 	// Quests
 	QuestRethbanGauntlet = 1699  // QUEST_FLAGS_STAY_ALIVE (0x1)
@@ -83,6 +89,7 @@ const (
 
 	// Maps / positions from AC issues
 	MapEasternKingdoms = 0
+	MapKalimdor        = 1
 	MapOutland         = 530
 	MapNorthrend       = 571
 	MapUlduar          = 603
@@ -135,7 +142,10 @@ func SessionAlive(s *Session) bool {
 	if s == nil || s.World == nil {
 		return false
 	}
-	// InWorld is false after disconnect; also phase may stick.
+	if s.World.IsStopped() {
+		return false
+	}
+	// InWorld is false after disconnect; also phase may stick after close — check stopped first.
 	return s.World.IsInWorld() || s.World.SessionPhase() != 0
 }
 
@@ -144,10 +154,11 @@ func SessionAlive(s *Session) bool {
 // Methods on ScenarioBot (Teleport, Cast, Die, …) hide World vs Session choice.
 type ScenarioBot struct {
 	*Session
-	AuthDB *sql.DB
-	CharDB *sql.DB
-	Ident  BotIdent
-	Role   string // optional label from BotSpec.Role
+	AuthDB  *sql.DB
+	CharDB  *sql.DB
+	WorldDB *sql.DB // optional; opened on demand for spawn-id cleanup
+	Ident   BotIdent
+	Role    string // optional label from BotSpec.Role
 }
 
 // BotSpec describes one bot inside a heterogeneous multi-bot scenario.
@@ -268,6 +279,10 @@ func NewScenario(t *testing.T, opt ScenarioOpts) []*ScenarioBot {
 		if opt.StartPad != nil {
 			TeleportPad(t, s.World, *opt.StartPad)
 		}
+		// Dismiss pets / risen ghouls / guardians before Session.Close (LIFO: this
+		// runs first). Soft — no-ops if the socket is already dead.
+		bot := bots[i]
+		t.Cleanup(func() { bot.CleanupOwnedSummons(t) })
 	}
 	return bots
 }
@@ -503,10 +518,13 @@ func AddQuest(t *testing.T, w *client.WorldClient, questID uint32) {
 }
 
 // Die kills the player via GM `.die` (requires target self).
+// Prefer DieMust on ScenarioBot — bare Die can no-op if selection is not applied yet.
 func Die(t *testing.T, w *client.WorldClient) {
 	t.Helper()
+	MustGM(t, w, ".cheat god off")
 	if guid := w.CharGUID(); guid != 0 {
 		_ = w.SetTarget(guid)
+		time.Sleep(80 * time.Millisecond)
 	}
 	MustGM(t, w, ".die")
 }
