@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -40,8 +41,10 @@ const (
 	// Spells
 	SpellCharge               = 100   // Charge (warrior)
 	SpellIntercept            = 20252 // Intercept
-	SpellBattleStance         = 2457
-	SpellTaunt                = 355 // Taunt (warrior) — threat multi-bot
+	SpellBattleStance    = 2457
+	SpellDefensiveStance = 71   // Defensive Stance (warrior tank form)
+	SpellTaunt           = 355  // Taunt — 3.3.5a requires Defensive Stance (not Battle)
+
 	SpellSweepingStrikes      = 12328
 	SpellExecute              = 5308
 	SpellRaiseDead            = 46584 // DK Raise Dead
@@ -336,7 +339,7 @@ func loginBots(t *testing.T, idents []BotIdent, autoCleanup bool) []*Session {
 	}
 	// Reuse parallel path for multi-bot; inject race/class via loginBotWithRetryRaceClass.
 	if len(idents) == 1 {
-		s, err := loginBotWithRetryRaceClass(t, idents[0])
+		s, err := loginBotWithRetryRaceClass(t, idents[0], nil)
 		if err != nil {
 			t.Fatalf("login %s: %v", idents[0].Account, err)
 		}
@@ -355,7 +358,9 @@ func loginBots(t *testing.T, idents []BotIdent, autoCleanup bool) []*Session {
 		s *Session
 		e error
 	}
-	// sequential-safe: use goroutines like loginAllianceBots
+	// Fail-fast: once any bot exhausts retries, stop further attempts on siblings
+	// so we do not thrash auth/world for another full retry budget.
+	var stopRetry atomic.Bool
 	done := make(chan result, len(idents))
 	start := time.Now()
 	t.Logf("parallel login: %d bots (max concurrency %d)", len(idents), MaxParallelLogins)
@@ -364,7 +369,10 @@ func loginBots(t *testing.T, idents []BotIdent, autoCleanup bool) []*Session {
 		go func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			s, err := loginBotWithRetryRaceClass(t, id)
+			s, err := loginBotWithRetryRaceClass(t, id, &stopRetry)
+			if err != nil {
+				stopRetry.Store(true)
+			}
 			done <- result{i: i, s: s, e: err}
 		}()
 	}
@@ -403,7 +411,7 @@ func loginBots(t *testing.T, idents []BotIdent, autoCleanup bool) []*Session {
 	return sessions
 }
 
-func loginBotWithRetryRaceClass(t *testing.T, id BotIdent) (*Session, error) {
+func loginBotWithRetryRaceClass(t *testing.T, id BotIdent, stopRetry *atomic.Bool) (*Session, error) {
 	t.Helper()
 	race, class := id.Race, id.Class
 	if race == 0 {
@@ -415,6 +423,9 @@ func loginBotWithRetryRaceClass(t *testing.T, id BotIdent) (*Session, error) {
 	var s *Session
 	var err error
 	for attempt := 1; attempt <= 3; attempt++ {
+		if stopRetry != nil && stopRetry.Load() {
+			return nil, fmt.Errorf("aborted: another bot login already failed")
+		}
 		s, err = LoginBot(t, LoginOptions{
 			User:     id.Account,
 			Password: DefaultPassword,
@@ -425,7 +436,13 @@ func loginBotWithRetryRaceClass(t *testing.T, id BotIdent) (*Session, error) {
 		if err == nil {
 			return s, nil
 		}
+		// LoginBot closes the world client on failure; defensive if a partial Session is ever returned.
+		if s != nil {
+			s.Close()
+			s = nil
+		}
 		t.Logf("login %s attempt %d failed: %v", id.Account, attempt, err)
+		// Brief pause so worldserver can finish DelayedClose / session_key settle before re-SRP.
 		time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 	}
 	return nil, err

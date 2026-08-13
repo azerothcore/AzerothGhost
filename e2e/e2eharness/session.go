@@ -45,6 +45,8 @@ type LoginOptions struct {
 }
 
 // LoginBot authenticates, connects to the first realm, creates a character if needed, and enters world.
+// On any failure after the world client is created, the world socket is closed so retries cannot
+// leave zombie connections or re-auth with a new session_key while an old CMSG_AUTH_SESSION is in flight.
 func LoginBot(t *testing.T, opt LoginOptions) (*Session, error) {
 	t.Helper()
 	if opt.AuthAddr == "" {
@@ -60,8 +62,24 @@ func LoginBot(t *testing.T, opt LoginOptions) (*Session, error) {
 		opt.Class = 1 // warrior
 	}
 
-	auth := client.NewAuthClient(opt.User, opt.Password)
-	realms, err := auth.Authenticate(opt.AuthAddr)
+	// Authserver uses a single network thread; under parallel multi-bot login a
+	// logon-proof read can occasionally time out. Retry SRP before touching world.
+	var realms []client.RealmInfo
+	var sessionKey []byte
+	var err error
+	for authAttempt := 1; authAttempt <= 3; authAttempt++ {
+		auth := client.NewAuthClient(opt.User, opt.Password)
+		realms, err = auth.Authenticate(opt.AuthAddr)
+		if err == nil && len(realms) > 0 {
+			sessionKey = append([]byte(nil), auth.SessionKey()...)
+			break
+		}
+		if err == nil {
+			err = fmt.Errorf("no realms")
+		}
+		t.Logf("%s auth attempt %d failed: %v", opt.User, authAttempt, err)
+		time.Sleep(time.Duration(authAttempt) * 300 * time.Millisecond)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("auth: %w", err)
 	}
@@ -78,7 +96,7 @@ func LoginBot(t *testing.T, opt LoginOptions) (*Session, error) {
 		}
 		t.Logf("[%s] "+format, append([]interface{}{opt.User}, args...)...)
 	}
-	w := client.NewWorldClient(strings.ToUpper(opt.User), auth.SessionKey(), logFn)
+	w := client.NewWorldClient(strings.ToUpper(opt.User), sessionKey, logFn)
 	// Default LogInfo: phase/trade/login/GM short lines; not per-spell or combat thrash.
 	// Override with E2E_WORLD_LOG=debug|trace|warn|error|silent for deeper dumps.
 	if raw, ok := os.LookupEnv("E2E_WORLD_LOG"); ok {
@@ -93,6 +111,16 @@ func LoginBot(t *testing.T, opt LoginOptions) (*Session, error) {
 	})
 	// Race drives GM-command chat language (Horde cannot speak Common).
 	w.SetCharRace(opt.Race)
+
+	// Always tear down the world client on failure. Leaving it open on "wait authed"
+	// timeout caused multi-bot thrash: retries re-SRP and overwrite account.session_key
+	// while the old socket still authenticates with the previous key (core AUTH_FAILED).
+	success := false
+	defer func() {
+		if !success {
+			w.Close()
+		}
+	}()
 
 	bs := &Session{World: w, Name: opt.CharName, User: opt.User, logf: logFn}
 	charListCh := make(chan []client.CharEnumEntry, 2)
@@ -220,6 +248,7 @@ func LoginBot(t *testing.T, opt LoginOptions) (*Session, error) {
 	if err := w.WaitForLogin(60 * time.Second); err != nil {
 		return nil, fmt.Errorf("wait login: %w", err)
 	}
+	success = true
 	return bs, nil
 }
 

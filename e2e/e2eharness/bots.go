@@ -3,12 +3,16 @@ package e2eharness
 import (
 	"database/sql"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 // MaxParallelLogins caps concurrent bot logins to avoid authserver/world thrash.
-const MaxParallelLogins = 5
+// Authserver is single-threaded for sockets; world AUTH_CHALLENGE is cheap, but
+// parallel enter-world + retries can amplify session_key races if clients leak.
+// 3 is enough for typical multi-bot suites without saturating auth.
+const MaxParallelLogins = 3
 
 // BotIdent is a unique account + character name pair for one e2e bot.
 // Race/Class are optional (0 = Human Warrior defaults at login).
@@ -98,14 +102,18 @@ func CleanupSessionsGuildState(t *testing.T, charDB *sql.DB, sessions []*Session
 	}
 }
 
+// guildNameSeq disambiguates UniqueGuildName when two calls share the same nanosecond.
+var guildNameSeq atomic.Uint64
+
 // UniqueGuildName returns a short unique guild name for this run.
 func UniqueGuildName(prefix string) string {
 	if prefix == "" {
 		prefix = "G"
 	}
-	// Keep short — guild names have length limits. Nano avoids same-second collisions
-	// under -count=N / package-parallel full suites.
-	return fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()%1_000_000_000)
+	// Keep short — guild names have length limits. Nano alone can collide under
+	// -count=N or back-to-back calls in the same nanosecond (e2e UniqueGuildName test).
+	seq := guildNameSeq.Add(1)
+	return fmt.Sprintf("%s%d%02d", prefix, time.Now().UnixNano()%1_000_000_000, seq%100)
 }
 
 // OpenTestDBs opens auth + character DBs or fails the test.

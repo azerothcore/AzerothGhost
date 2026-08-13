@@ -122,8 +122,10 @@ const (
 	SmsgRemovedSpell    uint16 = 0x0203
 	SmsgCooldownEvent   uint16 = 0x0135
 	SmsgClearCooldown   uint16 = 0x01DE
-	CmsgCancelCast      uint16 = 0x012F
-	CmsgCancelAura      uint16 = 0x0133
+	CmsgCancelCast uint16 = 0x012F
+	// CMSG_CANCEL_AURA = 0x136 on 3.3.5a (AC Opcodes.h). 0x133 is SMSG_SPELL_FAILURE only;
+	// using 0x133 made CancelAura a silent no-op server-side.
+	CmsgCancelAura uint16 = 0x0136
 
 	// Update object opcodes
 	SmsgUpdateObject         uint16 = 0x00A9
@@ -1129,7 +1131,9 @@ func (w *WorldClient) Connect(worldAddr string) error {
 func (w *WorldClient) Run() error {
 	// Read SMSG_AUTH_CHALLENGE
 	if err := w.handleAuthChallenge(); err != nil {
-		w.conn.Close()
+		// Close (not bare conn.Close): signalStop wakes WaitForSessionPhase waiters
+		// immediately instead of burning the full authed timeout on phase "none".
+		w.Close()
 		return fmt.Errorf("auth challenge: %w", err)
 	}
 
@@ -1611,9 +1615,20 @@ func (w *WorldClient) handleAuthResponse(data []byte) {
 	}
 
 	result := data[0]
-	if result != 12 { // AUTH_OK = 12
-		w.log("Auth response failed with code %d", result)
+	// AUTH_OK = 0x0C (12). AUTH_WAIT_QUEUE = 0x1B (27) is not terminal — wait for AUTH_OK.
+	const authOK = uint8(12)
+	const authWaitQueue = uint8(27)
+	if result == authWaitQueue {
+		w.log("World auth wait queue (code %d) — staying connected", result)
+		return
+	}
+	if result != authOK {
+		// Digest mismatch / banned / reject / etc. Tear down immediately so
+		// WaitForSessionPhase unblocks and LoginBot can Close+retry without
+		// burning the full authed timeout on a dead crypto session.
+		w.log("Auth response failed with code %d — closing", result)
 		w.lastError = fmt.Errorf("world auth failed with code %d", result)
+		w.Close()
 		return
 	}
 

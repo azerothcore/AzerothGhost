@@ -38,9 +38,8 @@ func IsHighValueTraceOpcode(op uint16) bool {
 		SmsgAttackerStateUpdate, SmsgCancelCombat, SmsgAiReaction,
 		CmsgSetSelection, CmsgSetSheathed:
 		return true
-	// Spells / auras
-	// Note: CmsgCancelAura shares 0x0133 with SmsgSpellFailure on 3.3.5a — one case covers both.
-	case CmsgCastSpell, CmsgCancelCast,
+	// Spells / auras (CmsgCancelAura is 0x136; SmsgSpellFailure is 0x133)
+	case CmsgCastSpell, CmsgCancelCast, CmsgCancelAura,
 		SmsgCastFailed, SmsgSpellStart, SmsgSpellGo, SmsgSpellFailure,
 		SmsgSpellCooldown, SmsgCooldownEvent, SmsgClearCooldown,
 		SmsgInitialSpells, SmsgLearnedSpell, SmsgSupercededSpell, SmsgRemovedSpell,
