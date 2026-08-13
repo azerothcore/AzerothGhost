@@ -26,15 +26,15 @@ const (
 
 // LootStartRoll is SMSG_LOOT_START_ROLL.
 type LootStartRoll struct {
-	ItemGUID       uint64
-	MapID          uint32
-	ItemSlot       uint32
-	ItemID         uint32
-	RandomSuffix   uint32
-	RandomPropID   uint32
-	ItemCount      uint32
-	CountdownMS    uint32
-	RollVoteMask   uint8
+	ItemGUID     uint64
+	MapID        uint32
+	ItemSlot     uint32
+	ItemID       uint32
+	RandomSuffix uint32
+	RandomPropID uint32
+	ItemCount    uint32
+	CountdownMS  uint32
+	RollVoteMask uint8
 }
 
 // LootRollEvent is SMSG_LOOT_ROLL (someone voted).

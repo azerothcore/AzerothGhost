@@ -2,6 +2,7 @@ package e2eharness
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,13 +22,13 @@ type Session struct {
 	// logf is optional (usually t.Logf-backed) for waiter-drop warnings.
 	logf func(format string, args ...interface{})
 
-	mu         sync.Mutex
-	signCh     chan *client.PetitionSignResults
-	showCh     chan *client.PetitionShowSignatures
-	turnCh     chan uint32
-	bankCh     chan *client.GuildBankList
-	moneyCh    chan int32
-	itemPushCh chan *client.ItemPushResult
+	mu          sync.Mutex
+	signCh      chan *client.PetitionSignResults
+	showCh      chan *client.PetitionShowSignatures
+	turnCh      chan uint32
+	bankCh      chan *client.GuildBankList
+	moneyCh     chan int32
+	itemPushCh  chan *client.ItemPushResult
 	spellCh     chan SpellCastResult
 	waitersOn   bool
 	spellHookOn bool // AddSpellCastResultHook installed once
@@ -78,6 +79,15 @@ func LoginBot(t *testing.T, opt LoginOptions) (*Session, error) {
 		t.Logf("[%s] "+format, append([]interface{}{opt.User}, args...)...)
 	}
 	w := client.NewWorldClient(strings.ToUpper(opt.User), auth.SessionKey(), logFn)
+	// Default LogInfo: phase/trade/login/GM short lines; not per-spell or combat thrash.
+	// Override with E2E_WORLD_LOG=debug|trace|warn|error|silent for deeper dumps.
+	if raw, ok := os.LookupEnv("E2E_WORLD_LOG"); ok {
+		if lvl, ok := client.ParseLogLevel(raw); ok {
+			w.SetLogLevel(lvl)
+		}
+	} else {
+		w.SetLogLevel(client.LogInfo)
+	}
 	t.Cleanup(func() {
 		logClosed.Store(true)
 	})

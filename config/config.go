@@ -133,15 +133,16 @@ func Load(profile, cfgPath string) (CLIConfig, error) {
 
 func defaultCLIConfig() CLIConfig {
 	return CLIConfig{
-		AuthServer:         "127.0.0.1:3724",
-		BotMode:            "grind",
-		Listen:             ":8080",
-		NumBots:            1,
-		AccountPrefix:      "loadbot",
-		AccountPassword:    "loadbot",
-		SpawnRateLimit:     5,
-		SpawnRateInterval:  time.Second,
-		LogDecisionsToChat: true, // convenient default for single-bot CLI observation
+		AuthServer:        "127.0.0.1:3724",
+		BotMode:           "grind",
+		Listen:            ":8080",
+		NumBots:           1,
+		AccountPrefix:     "loadbot",
+		AccountPassword:   "loadbot",
+		SpawnRateLimit:    5,
+		SpawnRateInterval: time.Second,
+		// Off by default: army/load must not flood /say. Opt in for single-bot watching.
+		LogDecisionsToChat: false,
 		// Validation* fields default false/empty → no perf cost on regular runs
 	}
 }

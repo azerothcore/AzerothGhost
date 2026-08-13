@@ -14,26 +14,29 @@ import (
 //   - CONFIRMED BUG: core behaviour is wrong (expected on unfixed AC)
 //   - harness failure: infra/timeout/missing unit (not an AC bug report)
 
+// e2eFailPrefix is greppable in CI logs alongside go's "--- FAIL".
+const e2eFailPrefix = "E2E_FAIL "
+
 // Preconditionf fails the test: setup did not reach a state where the issue
 // can be evaluated. Prefer this over a bare Fatalf for missing NPCs, failed
 // auras, etc.
 func Preconditionf(t *testing.T, format string, args ...any) {
 	t.Helper()
-	t.Fatalf("precondition: "+format, args...)
+	t.Fatalf(e2eFailPrefix+"precondition: "+format, args...)
 }
 
 // ConfirmedBugf fails with the standard AC-issue bug marker.
 // issue is the AzerothCore issue or PR number (e.g. 27095).
 func ConfirmedBugf(t *testing.T, issue int, format string, args ...any) {
 	t.Helper()
-	t.Fatalf("AC#%d CONFIRMED BUG: "+format, append([]any{issue}, args...)...)
+	t.Fatalf(e2eFailPrefix+"AC#%d CONFIRMED BUG: "+format, append([]any{issue}, args...)...)
 }
 
 // HarnessFailf fails for infra problems (timeouts, cache empty, cast never
 // started) that are not themselves the AC bug under test.
 func HarnessFailf(t *testing.T, format string, args ...any) {
 	t.Helper()
-	t.Fatalf("harness: "+format, args...)
+	t.Fatalf(e2eFailPrefix+"harness: "+format, args...)
 }
 
 // SoftWarnf logs a non-fatal WARNING (soft-pass diagnostics).
@@ -54,7 +57,7 @@ func SoftPass(t *testing.T, reason string, format string, args ...any) {
 	if os.Getenv("E2E_ALLOW_SOFT_PASS") == "1" {
 		return
 	}
-	t.Fatalf("SOFT-PASS disabled (set E2E_ALLOW_SOFT_PASS=1 to allow) reason=%s %s", reason, msg)
+	t.Fatalf(e2eFailPrefix+"SOFT-PASS disabled (set E2E_ALLOW_SOFT_PASS=1 to allow) reason=%s %s", reason, msg)
 }
 
 // SoftPassf is SoftPass with reason taken from the format string prefix.
@@ -67,7 +70,7 @@ func SoftPassf(t *testing.T, format string, args ...any) {
 // Preconditionf after the scenario has already been exercised.
 func Assertf(t *testing.T, format string, args ...any) {
 	t.Helper()
-	t.Fatalf("assert: "+format, args...)
+	t.Fatalf(e2eFailPrefix+"assert: "+format, args...)
 }
 
 // AssertBugf fails a product oracle. issue must be >0; otherwise Assertf.

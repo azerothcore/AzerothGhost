@@ -103,8 +103,9 @@ func UniqueGuildName(prefix string) string {
 	if prefix == "" {
 		prefix = "G"
 	}
-	// Keep short — guild names have length limits.
-	return fmt.Sprintf("%s%d", prefix, time.Now().Unix()%1000000)
+	// Keep short — guild names have length limits. Nano avoids same-second collisions
+	// under -count=N / package-parallel full suites.
+	return fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()%1_000_000_000)
 }
 
 // OpenTestDBs opens auth + character DBs or fails the test.

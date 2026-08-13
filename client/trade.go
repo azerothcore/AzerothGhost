@@ -8,18 +8,18 @@ import (
 
 // Trade opcodes (3.3.5a / AzerothCore Opcodes.h).
 const (
-	CmsgInitiateTrade    uint16 = 0x0116
-	CmsgBeginTrade       uint16 = 0x0117
-	CmsgBusyTrade        uint16 = 0x0118
-	CmsgIgnoreTrade      uint16 = 0x0119
-	CmsgAcceptTrade      uint16 = 0x011A
-	CmsgUnacceptTrade    uint16 = 0x011B
-	CmsgCancelTrade      uint16 = 0x011C
-	CmsgSetTradeItem     uint16 = 0x011D
-	CmsgClearTradeItem   uint16 = 0x011E
-	CmsgSetTradeGold     uint16 = 0x011F
-	SmsgTradeStatus      uint16 = 0x0120
-	SmsgTradeStatusExt   uint16 = 0x0121
+	CmsgInitiateTrade  uint16 = 0x0116
+	CmsgBeginTrade     uint16 = 0x0117
+	CmsgBusyTrade      uint16 = 0x0118
+	CmsgIgnoreTrade    uint16 = 0x0119
+	CmsgAcceptTrade    uint16 = 0x011A
+	CmsgUnacceptTrade  uint16 = 0x011B
+	CmsgCancelTrade    uint16 = 0x011C
+	CmsgSetTradeItem   uint16 = 0x011D
+	CmsgClearTradeItem uint16 = 0x011E
+	CmsgSetTradeGold   uint16 = 0x011F
+	SmsgTradeStatus    uint16 = 0x0120
+	SmsgTradeStatusExt uint16 = 0x0121
 )
 
 // TradeStatus codes (SharedDefines.h TradeStatus).
@@ -57,12 +57,12 @@ const (
 
 // TradeStatusInfo is a parsed SMSG_TRADE_STATUS.
 type TradeStatusInfo struct {
-	Status                      uint32
-	TraderGUID                  uint64 // BEGIN_TRADE
-	Result                      uint32 // CLOSE_WINDOW inventory result
-	IsTargetResult              uint8
-	ItemLimitedByLimitCategory  uint32
-	Slot                        uint8 // WRONG_REALM / NOT_ON_TAPLIST
+	Status                     uint32
+	TraderGUID                 uint64 // BEGIN_TRADE
+	Result                     uint32 // CLOSE_WINDOW inventory result
+	IsTargetResult             uint8
+	ItemLimitedByLimitCategory uint32
+	Slot                       uint8 // WRONG_REALM / NOT_ON_TAPLIST
 }
 
 // TradeStatusName returns a short label for logging.
@@ -201,11 +201,13 @@ func (w *WorldClient) SetTradeGold(copper uint32) error {
 func (w *WorldClient) handleTradeStatus(data []byte) {
 	info, err := ParseTradeStatus(data)
 	if err != nil {
-		w.log("SMSG_TRADE_STATUS parse: %v", err)
+		w.logAt(LogWarn, "SMSG_TRADE_STATUS parse: %v", err)
 		return
 	}
 	w.tradeMu.Lock()
 	w.lastTradeStatus = info
+	w.tradeStatusSeen = true
+	w.tradeStatusSeq++
 	switch info.Status {
 	case TradeStatusBeginTrade, TradeStatusOpenWindow, TradeStatusTradeAccept, TradeStatusBackToTrade:
 		w.tradeOpen = true
@@ -216,6 +218,8 @@ func (w *WorldClient) handleTradeStatus(data []byte) {
 		w.tradeOpen = false
 	}
 	w.tradeMu.Unlock()
+	// Sparse e2e flake signal — keep at Info (not per-hit combat volume).
+	w.logAt(LogInfo, "SMSG_TRADE_STATUS %s", TradeStatusName(info.Status))
 	w.invokeTradeStatusHooks(info)
 }
 
@@ -227,8 +231,24 @@ func (w *WorldClient) TradeOpen() bool {
 }
 
 // LastTradeStatus returns the last SMSG_TRADE_STATUS snapshot.
+// Note: TradeStatusBusy == 0, so an all-zero struct means "never received" unless
+// TradeStatusSeen is true. Prefer TradeStatusSeen / TradeStatusSeq for that distinction.
 func (w *WorldClient) LastTradeStatus() TradeStatusInfo {
 	w.tradeMu.RLock()
 	defer w.tradeMu.RUnlock()
 	return w.lastTradeStatus
+}
+
+// TradeStatusSeen reports whether any SMSG_TRADE_STATUS was received this session.
+func (w *WorldClient) TradeStatusSeen() bool {
+	w.tradeMu.RLock()
+	defer w.tradeMu.RUnlock()
+	return w.tradeStatusSeen
+}
+
+// TradeStatusSeq is a monotonic counter of SMSG_TRADE_STATUS packets (0 = none yet).
+func (w *WorldClient) TradeStatusSeq() uint64 {
+	w.tradeMu.RLock()
+	defer w.tradeMu.RUnlock()
+	return w.tradeStatusSeq
 }

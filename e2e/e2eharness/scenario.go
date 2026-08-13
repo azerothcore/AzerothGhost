@@ -49,7 +49,7 @@ const (
 	SpellBloodTap             = 45529
 	SpellDismissPet           = 2641 // Dismiss Pet (hunter/warlock fallback)
 	SpellGroundingTotem       = 8177
-	SpellGroundingTotemEffect = 8178 // aura on the totem (consumed wrongly by AoE)
+	SpellGroundingTotemEffect = 8178  // aura on the totem (consumed wrongly by AoE)
 	SpellRainOfFire           = 5740  // rank 1; prefer SpellRainOfFireMax after learn-all
 	SpellRainOfFireMax        = 47820 // Rain of Fire rank 7 (WotLK)
 	SpellHellfire             = 1949  // warlock self-channel (reliable CancelCast probe)
@@ -68,7 +68,7 @@ const (
 	ItemCorpseDust          = 37201 // Raise Dead reagent
 
 	// Creatures
-	CreatureTargetDummy         = 2673  // L1 low-HP; L80 autoattack often oneshots before combat flag
+	CreatureTargetDummy         = 2673 // L1 low-HP; L80 autoattack often oneshots before combat flag
 	CreatureAdvTargetDummy      = 2674
 	CreatureMasterTargetDummy   = 12426
 	CreatureHeroicTrainingDummy = 31146 // L83 high HealthModifier; stable Engage target
@@ -484,6 +484,8 @@ func LearnAllMyClass(t *testing.T, w *client.WorldClient) {
 	// Spells arrive via SMSG_LEARNED_SPELL / re-send; small settle for known-spells map.
 	// Prefer polling KnowsSpell for a signature class spell when callers care.
 	time.Sleep(200 * time.Millisecond)
+	// One Info summary instead of hundreds of per-id lines (client batches at LogInfo).
+	w.FlushLearnedSpellLog()
 }
 
 // LearnSpell learns a single spell by ID via GM and waits until KnowsSpell.

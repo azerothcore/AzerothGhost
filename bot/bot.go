@@ -322,6 +322,16 @@ func (b *Bot) Run() BotResult {
 	// Step 2: Connect to worldserver
 	b.setStatus(BotStatusConnecting)
 	b.world = client.NewWorldClient(b.config.Username, authClient.SessionKey(), b.log)
+	// Load-safe default: suppress combat/selection/learn thrash on world client.
+	// Validation / packet-trace runs raise verbosity for single-bot debug.
+	switch {
+	case b.config.EnablePacketTrace:
+		b.world.SetLogLevel(client.LogTrace)
+	case b.config.ValidationMode:
+		b.world.SetLogLevel(client.LogDebug)
+	default:
+		b.world.SetLogLevel(client.LogWarn)
+	}
 
 	if err := b.world.Connect(realm.Address); err != nil {
 		return b.fail("connect to worldserver failed: %v", err)
@@ -3488,6 +3498,13 @@ func (b *Bot) fail(format string, args ...interface{}) BotResult {
 
 func (b *Bot) log(format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
+	// Combat thrash lines only in validation / observation / packet-trace —
+	// army load must not fmt.Printf every melee tick.
+	if strings.HasPrefix(msg, "ATTACK ") {
+		if !b.config.ValidationMode && !b.config.LogDecisionsToChat && !b.config.EnablePacketTrace {
+			return
+		}
+	}
 	fmt.Printf("[Bot %s] %s\n", b.id, msg)
 }
 
@@ -3520,9 +3537,12 @@ func (b *Bot) logDecision(format string, args ...interface{}) {
 }
 
 // sendAliveReasonChat sends a detailed "why we think this mob is alive" message to in-game chat.
-// Uses its own throttle so you can see the health/flags/npc/faction info when engaging or fighting.
-// Console output suppressed for high bot counts - only chat.
+// Gated by LogDecisionsToChat (same observation flag as AI decisions) so army load
+// does not flood worldserver chat. Throttled when enabled.
 func (b *Bot) sendAliveReasonChat(format string, args ...interface{}) {
+	if !b.config.LogDecisionsToChat {
+		return
+	}
 	if time.Since(b.lastAliveReasonChat) < 800*time.Millisecond {
 		return
 	}
@@ -3531,8 +3551,10 @@ func (b *Bot) sendAliveReasonChat(format string, args ...interface{}) {
 	if len(msg) > 120 {
 		msg = msg[:117] + "..."
 	}
+	if b.world == nil {
+		return
+	}
 	_ = b.world.SendChatMessage(client.ChatMsgSay, client.LangCommon, "[ALIVE] "+msg)
-	// no b.log - console is useless at scale
 }
 
 func (b *Bot) addEvent(eventType, format string, args ...interface{}) {

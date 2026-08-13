@@ -140,17 +140,7 @@ func CastAtPositionAndWait(t *testing.T, s *Session, spellID uint32, x, y, z flo
 
 // SpellFailReasonName maps 3.3.5a SpellCastResult codes to short names (AC SharedDefines).
 func SpellFailReasonName(reason uint8) string {
-	// Subset of common reasons; unknown codes fall back to decimal.
-	names := map[uint8]string{
-		0: "SUCCESS", 12: "BAD_TARGETS", 27: "DONT_REPORT", 46: "LINE_OF_SIGHT",
-		50: "MOVING", 55: "NOPATH", 62: "NOT_KNOWN", 66: "NOT_READY",
-		68: "NOT_STANDING", 85: "NO_POWER", 93: "OUT_OF_RANGE", 97: "OUT_OF_RANGE",
-		100: "REAGENTS", 130: "TOTEM_CATEGORY",
-	}
-	if s, ok := names[reason]; ok {
-		return s
-	}
-	return fmt.Sprintf("REASON_%d", reason)
+	return client.SpellFailReasonName(reason)
 }
 
 // AttackUntilHealthBelow swings at target until its health drops below threshold

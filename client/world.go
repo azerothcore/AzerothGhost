@@ -115,10 +115,15 @@ const (
 	SmsgSpellCooldown uint16 = 0x0134
 	SmsgCastFailed    uint16 = 0x0130 // server error for failed casts (may be sent on bad target)
 	SmsgInitialSpells uint16 = 0x012A
-	SmsgCooldownEvent uint16 = 0x0135
-	SmsgClearCooldown uint16 = 0x01DE
-	CmsgCancelCast    uint16 = 0x012F
-	CmsgCancelAura    uint16 = 0x0133
+	// Post-login spellbook updates (GM .learn, trainers, talents). Without these
+	// KnowsSpell only reflects SMSG_INITIAL_SPELLS from login.
+	SmsgLearnedSpell    uint16 = 0x012B
+	SmsgSupercededSpell uint16 = 0x012C
+	SmsgRemovedSpell    uint16 = 0x0203
+	SmsgCooldownEvent   uint16 = 0x0135
+	SmsgClearCooldown   uint16 = 0x01DE
+	CmsgCancelCast      uint16 = 0x012F
+	CmsgCancelAura      uint16 = 0x0133
 
 	// Update object opcodes
 	SmsgUpdateObject         uint16 = 0x00A9
@@ -178,9 +183,9 @@ const (
 	SmsgLevelupInfo uint16 = 0x01D4
 
 	// Death handling
-	CmsgRepopRequest         uint16 = 0x015A
-	CmsgReclaimCorpse        uint16 = 0x01D2
-	SmsgCorpseReclaimDelay   uint16 = 0x0269 // uint32 delay milliseconds
+	CmsgRepopRequest       uint16 = 0x015A
+	CmsgReclaimCorpse      uint16 = 0x01D2
+	SmsgCorpseReclaimDelay uint16 = 0x0269 // uint32 delay milliseconds
 
 	// Target / selection
 	CmsgSetSelection uint16 = 0x013D
@@ -905,18 +910,25 @@ type WorldClient struct {
 
 	// Callbacks (legacy single-slot fields; prefer Add*Hook for race-safe multi-subscriber).
 	// invoke*Hooks still calls these after registered hooks.
-	logFunc            func(format string, args ...interface{})
-	OnCharList         func(chars []CharEnumEntry)
-	OnCharCreateResult func(data []byte)
-	OnChatMessage      func(senderName, message string, msgType uint8)
-	OnLevelUp          func(newLevel uint32)
-	OnDeath            func()
-	OnKill             func(victimGUID uint64)
-	OnObjectUpdate     func(guid uint64, obj *WorldObject)
-	OnObjectRemove     func(guid uint64)
-	OnLootOpened       func(lootGUID uint64, items []LootItem)
-	OnCombatStart      func(attackerGUID, victimGUID uint64)
-	OnCombatStop       func()
+	logFunc  func(format string, args ...interface{})
+	logLevel LogLevel // effective only when logFunc != nil; default LogInfo
+	// Learn-spell log batching (Info summary; per-id at LogTrace only).
+	learnedLogCount  int
+	lastLearnedSpell uint32
+	// Log once flags (Info spam control across map transfers / combat).
+	initialSpellsLogged bool
+	selfCombatLogOnce   bool // one Info combat-start per combat episode
+	OnCharList          func(chars []CharEnumEntry)
+	OnCharCreateResult  func(data []byte)
+	OnChatMessage       func(senderName, message string, msgType uint8)
+	OnLevelUp           func(newLevel uint32)
+	OnDeath             func()
+	OnKill              func(victimGUID uint64)
+	OnObjectUpdate      func(guid uint64, obj *WorldObject)
+	OnObjectRemove      func(guid uint64)
+	OnLootOpened        func(lootGUID uint64, items []LootItem)
+	OnCombatStart       func(attackerGUID, victimGUID uint64)
+	OnCombatStop        func()
 	// OnInvalidTarget is fired only for terminal rejects (dead / cant-attack).
 	// Prefer OnAttackReject for full taxonomy (transient vs terminal).
 	OnInvalidTarget func(victimGUID uint64)
@@ -944,6 +956,7 @@ type WorldClient struct {
 	lootAllPassedHooks   []lootAllPassedHook
 	spellCastResultHooks []spellCastResultHook
 	groupInviteHooks     []groupInviteHook
+	groupDeclineHooks    []groupDeclineHook
 	groupListHooks       []groupListHook
 	// OnServerRelocate fires when the server forcibly moves the player (charge,
 	// blink, knockback, monster-move spline on self). Bot must abort local paths
@@ -968,6 +981,8 @@ type WorldClient struct {
 	// Trade state (SMSG_TRADE_STATUS).
 	tradeMu         sync.RWMutex
 	tradeOpen       bool
+	tradeStatusSeen bool
+	tradeStatusSeq  uint64
 	lastTradeStatus TradeStatusInfo
 	// OnTradeStatus fires for every SMSG_TRADE_STATUS.
 	OnTradeStatus func(info TradeStatusInfo)
@@ -983,6 +998,18 @@ type WorldClient struct {
 	OnLootRollWon func(r LootRollWon)
 	// OnLootAllPassed fires when everyone passes.
 	OnLootAllPassed func(r LootAllPassed)
+
+	// Vehicle / client control (SMSG_CLIENT_CONTROL_UPDATE).
+	vehicleMu   sync.RWMutex
+	controlGUID uint64 // non-self unit when client is granted control
+
+	// Summon request + instance reset (see summon.go).
+	summonMu             sync.RWMutex
+	pendingSummon        SummonRequest
+	lastInstanceResetMap uint32
+	OnSummonRequest      func(SummonRequest)
+	summonRequestHooks   []summonRequestHook
+	instanceResetHooks   []instanceResetHook
 }
 
 // GroupMember is one other party member from SMSG_GROUP_LIST (self is omitted).
@@ -1015,7 +1042,9 @@ type GroupState struct {
 	LootThresh  uint8
 }
 
-// NewWorldClient creates a world client
+// NewWorldClient creates a world client.
+// logFunc nil → fully silent. Non-nil defaults to LogInfo (lifecycle / sparse diagnostics;
+// hot paths and per-spell learn lines require LogDebug / LogTrace via SetLogLevel).
 func NewWorldClient(username string, sessionKey []byte, logFunc func(string, ...interface{})) *WorldClient {
 	return &WorldClient{
 		username:    strings.ToUpper(username),
@@ -1024,6 +1053,7 @@ func NewWorldClient(username string, sessionKey []byte, logFunc func(string, ...
 		logoutDone:  make(chan struct{}),
 		stopChan:    make(chan struct{}),
 		logFunc:     logFunc,
+		logLevel:    LogInfo,
 		objects:     make(map[uint64]*WorldObject),
 		knownSpells: make(map[uint32]*KnownSpell),
 		cooldowns:   make(map[uint32]*SpellCooldown),
@@ -1034,6 +1064,26 @@ func NewWorldClient(username string, sessionKey []byte, logFunc func(string, ...
 			wall    time.Time
 		}),
 	}
+}
+
+// SetLogLevel filters WorldClient diagnostics when logFunc is non-nil.
+func (w *WorldClient) SetLogLevel(level LogLevel) {
+	if w == nil {
+		return
+	}
+	w.sendMu.Lock()
+	w.logLevel = level
+	w.sendMu.Unlock()
+}
+
+// LogLevel returns the current filter level.
+func (w *WorldClient) LogLevel() LogLevel {
+	if w == nil {
+		return LogSilent
+	}
+	w.sendMu.Lock()
+	defer w.sendMu.Unlock()
+	return w.logLevel
 }
 
 // Connect connects to the world server
@@ -1386,7 +1436,7 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 		if len(short) > 32 {
 			short = short[:32]
 		}
-		w.log("SMSG %s (0x%04X) len=%d data=% x", OpcodeName(opcode), opcode, len(data), short)
+		w.logAt(LogTrace, "SMSG %s (0x%04X) len=%d data=% x", OpcodeName(opcode), opcode, len(data), short)
 	}
 
 	switch opcode {
@@ -1432,6 +1482,12 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 	// Spells
 	case SmsgInitialSpells:
 		w.handleInitialSpells(data)
+	case SmsgLearnedSpell:
+		w.handleLearnedSpell(data)
+	case SmsgSupercededSpell:
+		w.handleSupercededSpell(data)
+	case SmsgRemovedSpell:
+		w.handleRemovedSpell(data)
 	case SmsgSpellGo:
 		w.handleSpellGo(data)
 	case SmsgSpellFailure:
@@ -1511,6 +1567,8 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 	// Group / party
 	case SmsgGroupInvite:
 		w.handleGroupInvite(data)
+	case SmsgGroupDecline:
+		w.handleGroupDecline(data)
 	case SmsgGroupList:
 		w.handleGroupList(data)
 	case SmsgGroupDestroyed:
@@ -1528,6 +1586,18 @@ func (w *WorldClient) handlePacket(opcode uint16, data []byte) {
 	// Speed
 	case SmsgForceRunSpeedChange:
 		w.handleForceSpeedChange(data)
+
+	// Vehicle / control
+	case SmsgClientControlUpdate:
+		w.handleClientControlUpdate(data)
+
+	// Summon request + instance reset
+	case SmsgSummonRequest:
+		w.handleSummonRequest(data)
+	case SmsgInstanceReset:
+		w.handleInstanceReset(data)
+	case SmsgInstanceResetFailed:
+		w.handleInstanceResetFailed(data)
 
 	default:
 		// Ignore most unhandled opcodes
@@ -1559,7 +1629,7 @@ func (w *WorldClient) handleCharEnum(data []byte) {
 	r := bytes.NewReader(data)
 	count, _ := r.ReadByte()
 
-	w.log("Character enum: %d characters", count)
+	w.logAt(LogDebug, "Character enum: %d characters", count)
 
 	var chars []CharEnumEntry
 	for i := byte(0); i < count; i++ {
@@ -2159,6 +2229,8 @@ func (w *WorldClient) IsStopped() bool {
 // Close closes the connection and unblocks any pending reads.
 // Always signals stopChan (once) so waiters wake on hard disconnect.
 func (w *WorldClient) Close() {
+	// Flush learn batch while logFunc is still set.
+	w.FlushLearnedSpellLog()
 	w.sendMu.Lock()
 	w.stopped = true
 	// Drop t.Logf-backed logger first so late readLoop packets cannot panic with
@@ -2183,13 +2255,19 @@ func (w *WorldClient) Stop() {
 	w.Close()
 }
 
+// log is Info-level (lifecycle / sparse diagnostics). Prefer logAt for other tiers.
 func (w *WorldClient) log(format string, args ...interface{}) {
+	w.logAt(LogInfo, format, args...)
+}
+
+func (w *WorldClient) logAt(level LogLevel, format string, args ...interface{}) {
 	// Snapshot under sendMu so Close can nil logFunc without racing t.Logf
 	// after the test finishes (see vehicles relog flake).
 	w.sendMu.Lock()
 	fn := w.logFunc
+	cur := w.logLevel
 	w.sendMu.Unlock()
-	if fn == nil {
+	if fn == nil || cur == LogSilent || level == LogSilent || level > cur {
 		return
 	}
 	// Late readLoop packets can still hold a pre-Close snapshot of t.Logf after
@@ -2263,7 +2341,7 @@ func readPackedGUID(r io.Reader) (uint64, error) {
 func (w *WorldClient) AttackSwing(targetGUID uint64) error {
 	// Log with current pos/facing so we can correlate with any following SMSG_ATTACKSWING_* "target incorrect" packet
 	px, py, pz, po := w.posX, w.posY, w.posZ, w.orientation
-	w.log("CMSG_ATTACKSWING target=%d from (%.1f,%.1f,%.1f) facing=%.2f", targetGUID, px, py, pz, po)
+	w.logAt(LogDebug, "CMSG_ATTACKSWING target=%d from (%.1f,%.1f,%.1f) facing=%.2f", targetGUID, px, py, pz, po)
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.LittleEndian, targetGUID)
 	w.combatMu.Lock()
@@ -2284,7 +2362,7 @@ func (w *WorldClient) AttackStop() error {
 
 // SetTarget sends CMSG_SET_SELECTION to set the current target
 func (w *WorldClient) SetTarget(targetGUID uint64) error {
-	w.log("CMSG_SET_SELECTION target=%d", targetGUID)
+	w.logAt(LogDebug, "CMSG_SET_SELECTION target=%d", targetGUID)
 	w.combatMu.Lock()
 	w.targetGUID = targetGUID
 	w.combatMu.Unlock()
@@ -2410,23 +2488,43 @@ func (w *WorldClient) SendGMCommand(command string) error {
 	// account has sufficient GM level (or via account_access in the DB). The server
 	// intercepts it before normal chat processing for authorized users.
 	lang := w.nativeChatLang()
-	w.log("Sending GM command: %s (opcode=0x%04X encrypted=%v lang=%d)", command, CmsgMessageChat, w.encrypted, lang)
+	// Prep GM (.gm on/off, .combatstop, .cheat …) is Debug; action GM stays Info for e2e trails.
+	if isPrepGMCommand(command) {
+		w.logAt(LogDebug, "GM %s", command)
+	} else {
+		w.logAt(LogInfo, "GM %s", command)
+	}
+	w.logAt(LogDebug, "GM detail opcode=0x%04X encrypted=%v lang=%d", CmsgMessageChat, w.encrypted, lang)
 	err := w.SendChatMessage(ChatMsgSay, lang, command)
 	if err != nil {
-		w.log("GM command send error: %v", err)
+		w.logAt(LogError, "GM command send error: %v", err)
 	}
 	return err
 }
 
+// isPrepGMCommand reports high-frequency setup commands that bury e2e signal.
+func isPrepGMCommand(command string) bool {
+	c := strings.TrimSpace(strings.ToLower(command))
+	c = strings.TrimPrefix(c, ".")
+	switch {
+	case c == "gm on", c == "gm off", c == "gm", c == "combatstop":
+		return true
+	case strings.HasPrefix(c, "cheat "):
+		return true
+	default:
+		return false
+	}
+}
+
 // SendGuildChatMessage sends a message to guild chat (works for many servers even while dead).
 func (w *WorldClient) SendGuildChatMessage(message string) error {
-	w.log("Sending guild chat: %s", message)
+	w.logAt(LogDebug, "Sending guild chat: %s", message)
 	return w.SendChatMessage(ChatMsgGuild, LangCommon, message)
 }
 
 // SendGuildCommand sends a GM-style command via guild chat channel (preferred for .revive etc while dead).
 func (w *WorldClient) SendGuildCommand(command string) error {
-	w.log("Sending GUILD command: %s (via guild chat)", command)
+	w.logAt(LogInfo, "GUILD cmd %s", command)
 	return w.SendChatMessage(ChatMsgGuild, LangCommon, command)
 }
 
@@ -2548,10 +2646,12 @@ func cloneGroupState(s GroupState) GroupState {
 }
 
 // handleGroupInvite parses SMSG_GROUP_INVITE (invited flag + inviter name + padding).
+// Server uses flag=1 for a fresh invite and flag=0 when already-in-group notification.
 func (w *WorldClient) handleGroupInvite(data []byte) {
 	if len(data) < 2 {
 		return
 	}
+	// Keep historical "already" naming for hooks: non-zero flag = successful invite path.
 	already := data[0] != 0
 	// name is null-terminated after the flag byte
 	nameBytes := data[1:]
@@ -2563,6 +2663,23 @@ func (w *WorldClient) handleGroupInvite(data []byte) {
 		name = string(nameBytes)
 	}
 	w.invokeGroupInviteHooks(name, already)
+}
+
+// handleGroupDecline parses SMSG_GROUP_DECLINE (decliner name, null-terminated).
+// Sent to the inviting leader when the invitee declines — use to wait until the
+// server has cleared GetGroupInvite before sending the next invite.
+func (w *WorldClient) handleGroupDecline(data []byte) {
+	name := ""
+	if len(data) > 0 {
+		end := bytes.IndexByte(data, 0)
+		if end >= 0 {
+			name = string(data[:end])
+		} else {
+			name = string(data)
+		}
+	}
+	w.log("SMSG_GROUP_DECLINE from %s", name)
+	w.invokeGroupDeclineHooks(name)
 }
 
 // ParseGroupList parses SMSG_GROUP_LIST into GroupState (exported for unit tests).
@@ -3279,6 +3396,7 @@ func (w *WorldClient) MoveSpeed() float32 {
 func (w *WorldClient) handleCancelCombat() {
 	w.combatMu.Lock()
 	w.inCombat = false
+	w.selfCombatLogOnce = false
 	w.combatMu.Unlock()
 	if w.OnCombatStop != nil {
 		w.OnCombatStop()
@@ -3291,17 +3409,26 @@ func (w *WorldClient) handleAttackStart(data []byte) {
 	}
 	attacker := binary.LittleEndian.Uint64(data[0:8])
 	victim := binary.LittleEndian.Uint64(data[8:16])
-	w.log("SMSG_ATTACK_START: attacker=%d victim=%d myGUID=%d attacking=%d", attacker, victim, w.charGUID, w.attackingGUID)
+	w.logAt(LogDebug, "SMSG_ATTACK_START: attacker=%d victim=%d myGUID=%d attacking=%d", attacker, victim, w.charGUID, w.attackingGUID)
 	lowMy := w.charGUID & 0xFFFFFFFF
 	lowAttacker := attacker & 0xFFFFFFFF
 	lowVictim := victim & 0xFFFFFFFF
-	if attacker == w.charGUID || victim == w.charGUID || lowAttacker == lowMy || lowVictim == lowMy {
+	selfInvolved := attacker == w.charGUID || victim == w.charGUID || lowAttacker == lowMy || lowVictim == lowMy
+	if selfInvolved {
 		w.combatMu.Lock()
 		w.inCombat = true
 		if (victim == w.charGUID || lowVictim == lowMy) && w.targetGUID == 0 {
 			w.targetGUID = attacker
 		}
+		// One Info breadcrumb per combat episode for e2e (threat/engage flakes).
+		logSelf := !w.selfCombatLogOnce && (attacker == w.charGUID || lowAttacker == lowMy)
+		if logSelf {
+			w.selfCombatLogOnce = true
+		}
 		w.combatMu.Unlock()
+		if logSelf {
+			w.logAt(LogInfo, "combat start self attacker=0x%X victim=0x%X", attacker, victim)
+		}
 	}
 	// Also set if the start involves the target we are currently trying to attack (helps when GUID forms differ or server reports the engagement)
 	if w.attackingGUID != 0 && (attacker == w.attackingGUID || victim == w.attackingGUID || (attacker&0xFFFFFFFF) == (w.attackingGUID&0xFFFFFFFF) || (victim&0xFFFFFFFF) == (w.attackingGUID&0xFFFFFFFF)) {
@@ -3436,7 +3563,7 @@ func (w *WorldClient) handleAttackerStateUpdate(data []byte) {
 		victim := w.GetObject(victimGUID)
 		if victim != nil {
 			h := victim.Health()
-			w.log("Dealt %d damage to GUID %d Entry=%d (HP: %d)", totalDamage, victimGUID, victim.Entry, h)
+			w.logAt(LogDebug, "Dealt %d damage to GUID %d Entry=%d (HP: %d)", totalDamage, victimGUID, victim.Entry, h)
 			if h > 0 && totalDamage >= h {
 				w.log("Killed target GUID %d Entry=%d", victimGUID, victim.Entry)
 				if w.OnKill != nil {
@@ -3444,7 +3571,7 @@ func (w *WorldClient) handleAttackerStateUpdate(data []byte) {
 				}
 			}
 		} else {
-			w.log("Dealt %d damage to GUID %d (no object data)", totalDamage, victimGUID)
+			w.logAt(LogDebug, "Dealt %d damage to GUID %d (no object data)", totalDamage, victimGUID)
 		}
 	}
 
@@ -3474,7 +3601,7 @@ func (w *WorldClient) handleAttackerStateUpdate(data []byte) {
 		w.combatMu.Unlock()
 
 		w.statsMu.Lock()
-		w.log("Took %d damage from attacker GUID %d (HP: %d/%d)", totalDamage, attackerGUID, w.health, w.maxHealth)
+		w.logAt(LogDebug, "Took %d damage from attacker GUID %d (HP: %d/%d)", totalDamage, attackerGUID, w.health, w.maxHealth)
 		if w.health > 0 && totalDamage >= w.health {
 			w.health = 0
 			w.statsMu.Unlock()
@@ -3509,8 +3636,81 @@ func (w *WorldClient) handleInitialSpells(data []byte) {
 
 		w.knownSpells[spellID] = &KnownSpell{SpellID: spellID, Active: unk == 0}
 	}
+	first := !w.initialSpellsLogged
+	if first {
+		w.initialSpellsLogged = true
+	}
 	w.spellsMu.Unlock()
-	w.log("Received %d initial spells", spellCount)
+	// Map transfers re-send INITIAL_SPELLS; Info only once per session.
+	if first {
+		w.logAt(LogInfo, "Received %d initial spells", spellCount)
+	} else {
+		w.logAt(LogDebug, "Received %d initial spells (repeat)", spellCount)
+	}
+}
+
+// handleLearnedSpell parses SMSG_LEARNED_SPELL (uint32 spellId + uint16 unk).
+// Sent by AC Player::SendLearnPacket on GM .learn / trainer / talent paths.
+// Spell book state is always updated; console logs are aggregated at Info (see FlushLearnedSpellLog).
+func (w *WorldClient) handleLearnedSpell(data []byte) {
+	if len(data) < 4 {
+		return
+	}
+	spellID := binary.LittleEndian.Uint32(data[0:4])
+	w.spellsMu.Lock()
+	w.knownSpells[spellID] = &KnownSpell{SpellID: spellID, Active: true}
+	w.learnedLogCount++
+	w.lastLearnedSpell = spellID
+	w.spellsMu.Unlock()
+	w.logAt(LogTrace, "SMSG_LEARNED_SPELL %d", spellID)
+}
+
+// FlushLearnedSpellLog emits one Info summary for batched SMSG_LEARNED_SPELL packets
+// (e.g. after .learn all my class). Safe to call often; no-ops when count is 0.
+func (w *WorldClient) FlushLearnedSpellLog() {
+	if w == nil {
+		return
+	}
+	w.spellsMu.Lock()
+	n := w.learnedLogCount
+	last := w.lastLearnedSpell
+	w.learnedLogCount = 0
+	w.lastLearnedSpell = 0
+	w.spellsMu.Unlock()
+	if n > 0 {
+		w.logAt(LogInfo, "SMSG_LEARNED_SPELL count=%d last=%d", n, last)
+	}
+}
+
+// handleSupercededSpell parses SMSG_SUPERCEDED_SPELL (old + new rank).
+// Layout from AC: lower rank then higher rank when a higher rank is learned.
+func (w *WorldClient) handleSupercededSpell(data []byte) {
+	if len(data) < 8 {
+		return
+	}
+	oldID := binary.LittleEndian.Uint32(data[0:4])
+	newID := binary.LittleEndian.Uint32(data[4:8])
+	w.spellsMu.Lock()
+	if sp, ok := w.knownSpells[oldID]; ok {
+		sp.Active = false
+	} else {
+		w.knownSpells[oldID] = &KnownSpell{SpellID: oldID, Active: false}
+	}
+	w.knownSpells[newID] = &KnownSpell{SpellID: newID, Active: true}
+	w.spellsMu.Unlock()
+	w.logAt(LogDebug, "SMSG_SUPERCEDED_SPELL %d → %d", oldID, newID)
+}
+
+// handleRemovedSpell parses SMSG_REMOVED_SPELL (uint32 spellId).
+func (w *WorldClient) handleRemovedSpell(data []byte) {
+	if len(data) < 4 {
+		return
+	}
+	spellID := binary.LittleEndian.Uint32(data[0:4])
+	w.spellsMu.Lock()
+	delete(w.knownSpells, spellID)
+	w.spellsMu.Unlock()
+	w.logAt(LogDebug, "SMSG_REMOVED_SPELL %d", spellID)
 }
 
 func (w *WorldClient) handleSpellGo(data []byte) {
@@ -3544,13 +3744,16 @@ func (w *WorldClient) handleSpellFailure(data []byte) {
 	binary.Read(r, binary.LittleEndian, &reason)
 
 	if casterGUID == w.charGUID {
-		w.log("Spell %d FAILED (reason=%d)", spellID, reason)
+		// Keep Info: real in-flight fail for self (rarer than CAST_FAILED spam).
+		w.log("Spell %d FAILED reason=%d (%s)", spellID, reason, SpellFailReasonName(reason))
 		w.invokeSpellCastResultHooks(spellID, false, reason)
 	}
 }
 
 // handleCastFailed processes SMSG_CAST_FAILED (client-facing cast result).
 // Layout (3.3.5a): castCount(u8), spellId(u32), result(u8), optional args.
+// Logged at Debug: green e2e still sees routine fails (NO_POWER, DONT_REPORT, …)
+// that drown mid-log greps for "fail". Hooks remain for WaitSpell/CastMust.
 func (w *WorldClient) handleCastFailed(data []byte) {
 	if len(data) < 6 {
 		return
@@ -3558,7 +3761,8 @@ func (w *WorldClient) handleCastFailed(data []byte) {
 	castCount := data[0]
 	spellID := binary.LittleEndian.Uint32(data[1:5])
 	reason := data[5]
-	w.log("SMSG_CAST_FAILED spell=%d reason=%d castCount=%d", spellID, reason, castCount)
+	w.logAt(LogDebug, "SMSG_CAST_FAILED spell=%d reason=%d (%s) castCount=%d",
+		spellID, reason, SpellFailReasonName(reason), castCount)
 	w.invokeSpellCastResultHooks(spellID, false, reason)
 }
 

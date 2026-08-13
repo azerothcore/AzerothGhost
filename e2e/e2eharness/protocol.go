@@ -15,30 +15,6 @@ func objectEntryFromGUID(guid uint64) uint32 {
 	return uint32((guid >> 24) & 0xFFFFFF)
 }
 
-// findTabardDesignerGUID polls the client object cache for Aldwin Laughlin
-// (entry 4974). Cache is filled by SMSG_UPDATE_OBJECT after teleport — no spawn-id
-// fallback; if the unit is missing the object stream is wrong.
-func findTabardDesignerGUID(t *testing.T, w *client.WorldClient, timeout time.Duration) uint64 {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if g := w.FindUnitByEntry(StormwindTabardDesignerEntry, 40); g != 0 {
-			return g
-		}
-		if g := w.FindUnitByEntry(StormwindTabardDesignerEntry, 0); g != 0 {
-			return g
-		}
-		// Also match by entry embedded in ObjectGuid high bits (CREATE without template entry).
-		for _, u := range w.GetNearbyUnits(50) {
-			if u.Entry == StormwindTabardDesignerEntry || objectEntryFromGUID(u.GUID) == StormwindTabardDesignerEntry {
-				return u.GUID
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	return 0
-}
-
 // EnableGM turns on GM mode via chat (requires account GM level).
 func EnableGM(t *testing.T, w *client.WorldClient) {
 	t.Helper()
@@ -82,25 +58,25 @@ func AddItem(t *testing.T, w *client.WorldClient, entry, count uint32) {
 // TeleportGo teleports the player with AC `.go xyz x y z [map]` (live world).
 // Note: bare `.go x y z` is not a valid AC command (needs the `xyz` subcommand).
 // Waits for self teleport completion (SMSG_MOVE_TELEPORT / SMSG_NEW_WORLD).
-// Near-teleport clears the client's object cache; callers that need nearby units
-// must re-wait for SMSG_UPDATE_OBJECT after this returns.
+// Near-tele does not wipe the client object cache (see handleMoveTeleportAck), but
+// destination creates arrive asynchronously — callers that need nearby units must
+// still poll the object cache after this returns.
 func TeleportGo(t *testing.T, w *client.WorldClient, x, y, z float32, mapID uint32) {
 	t.Helper()
 	MustGMTeleport(t, w, fmt.Sprintf(".go xyz %.2f %.2f %.2f %d", x, y, z, mapID))
 }
 
 // TeleportToStormwindTabardDesigner places the player at Aldwin Laughlin
-// (acore_world creature guid=79681) via `.go creature`. Visibility creates should
-// arrive immediately after near-tele ACK. No NPC spawn/entry/xyz fallbacks —
-// missing cache means UPDATE_OBJECT stream desync (see skipMovementUpdate).
-func TeleportToStormwindTabardDesigner(t *testing.T, w *client.WorldClient) {
+// (acore_world creature guid=79681, entry 4974) via one `.go creature` and waits
+// until the live unit is in the client object cache. Returns that live ObjectGuid.
+//
+// Near-tele ACK returns before SMSG_UPDATE_OBJECT fills nearby units. Wait once for
+// entry 4974 — do not re-tele, offset, or .respawn while waiting (another tele
+// restarts AOI and commonly leaves only patrollers/critters in cache).
+func TeleportToStormwindTabardDesigner(t *testing.T, w *client.WorldClient) uint64 {
 	t.Helper()
 	MustGMTeleport(t, w, fmt.Sprintf(".go creature %d", StormwindTabardDesignerGUIDLow))
-	if findTabardDesignerGUID(t, w, 3*time.Second) != 0 {
-		t.Logf("tabard designer visible after .go creature %d", StormwindTabardDesignerGUIDLow)
-		return
-	}
-	t.Logf("tabard designer not yet in object cache after .go creature (will wait for live UPDATE_OBJECT)")
+	return WaitNearbyUnitByEntry(t, w, StormwindTabardDesignerEntry, 20*time.Second)
 }
 
 // TeleportToStormwindGuildVault places the player at guild vault guid=41911
@@ -116,7 +92,8 @@ func TeleportToStormwindGuildVault(t *testing.T, w *client.WorldClient) {
 // WaitNearbyUnitByEntry polls the WorldClient object cache for a unit with the
 // given template entry (from live SMSG_UPDATE_OBJECT after teleport).
 // Modern AC assigns runtime ObjectGuid counters (not DB spawn ids), so petition
-// buy / vendor interact must use the live GUID.
+// buy / vendor interact must use the live GUID. Entry match uses OBJECT_FIELD_ENTRY
+// when present, else the 24-bit entry packed into map-specific Unit ObjectGuids.
 func WaitNearbyUnitByEntry(t *testing.T, w *client.WorldClient, entry uint32, timeout time.Duration) uint64 {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -133,13 +110,17 @@ func WaitNearbyUnitByEntry(t *testing.T, w *client.WorldClient, entry uint32, ti
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	// Dump nearby for diagnostics.
+	// Dump nearby + cache stats for diagnostics.
+	byType, goN, total := w.ObjectTrackStats()
 	units := w.GetNearbyUnits(60)
+	px, py, pz, pmap := Position(w)
+	t.Logf("wait entry=%d timeout=%s pos=(%.2f,%.2f,%.2f) map=%d totalObj=%d go=%d byType=%v nearUnits=%d",
+		entry, timeout, px, py, pz, pmap, total, goN, byType, len(units))
 	for _, u := range units {
 		t.Logf("  nearby unit guid=0x%X entry=%d guidEntry=%d",
 			u.GUID, u.Entry, objectEntryFromGUID(u.GUID))
 	}
-	t.Fatalf("no live unit with entry=%d within %s (%d nearby units)", entry, timeout, len(units))
+	t.Fatalf("no live unit with entry=%d within %s (%d nearby units, totalObj=%d)", entry, timeout, len(units), total)
 	return 0
 }
 
@@ -207,55 +188,31 @@ func BuyGuildCharter(t *testing.T, sess *Session, charDB *sql.DB, guildName stri
 	MustGM(t, w, ".combatstop")
 	ModMoney(t, w, GuildCharterCostCopper+GuildBankFirstTabCost+5_000_000)
 
-	// One tele to Aldwin; petition buy needs a live ObjectGuid from UPDATE_OBJECT.
-	TeleportToStormwindTabardDesigner(t, w)
-	ModMoney(t, w, GuildCharterCostCopper)
-	// Hard wait — no spawn-id GUID fallback (runtime counters; fake GUIDs always fail).
-	npcGUID := WaitNearbyUnitByEntry(t, w, StormwindTabardDesignerEntry, 12*time.Second)
+	// One tele; returns live Aldwin ObjectGuid from UPDATE_OBJECT (no spawn-id fallback).
+	npcGUID := TeleportToStormwindTabardDesigner(t, w)
 	t.Logf("live tabard NPC guid=0x%X", npcGUID)
 
 	_ = w.SetTarget(npcGUID)
 
-	// Retry buy once — gRPC interact can flake under LB reconnect.
-	// Success requires SMSG_ITEM_PUSH_RESULT; petition DB row alone is not enough.
-	//
-	// Keep waiters armed across attempts (do not re-Arm between Send retries):
-	// gateway may take >12s when CanPlayerInteractWithNPC gRPC thrashs, and a late
-	// push from attempt 1 would be dropped if channels were recreated/drained.
+	// Single CMSG_PETITION_BUY. Success requires SMSG_ITEM_PUSH_RESULT;
+	// petition DB row alone is not enough.
 	sess.ArmAllWaiters()
 	sess.DrainItemPushes()
-	var push *client.ItemPushResult
-	var itemLow, petitionID uint32
-	var lastPushErr error
-	for attempt := 1; attempt <= 2; attempt++ {
-		if err := w.SendPetitionBuy(npcGUID, guildName); err != nil {
-			t.Fatalf("SendPetitionBuy: %v", err)
-		}
-		t.Logf("CMSG_PETITION_BUY sent name=%s npc=0x%X attempt=%d", guildName, npcGUID, attempt)
+	if err := w.SendPetitionBuy(npcGUID, guildName); err != nil {
+		t.Fatalf("SendPetitionBuy: %v", err)
+	}
+	t.Logf("CMSG_PETITION_BUY sent name=%s npc=0x%X", guildName, npcGUID)
 
-		// Protocol ownership: SMSG_ITEM_PUSH_RESULT from world StoreNewItem path.
-		// Long window: gateway may queue buy while world gRPC interact recovers.
-		var err error
-		push, err = sess.WaitItemPushEntry(ItemGuildCharter, 25*time.Second)
-		if err == nil {
-			t.Logf("item push OK: entry=%d bag=%d slot=%d count=%d invCount=%d",
-				push.Entry, push.BagSlot, push.ItemSlot, push.Count, push.InventoryCount)
-			// Identity only after push — ITEM_PUSH has no item ObjectGuid.
-			itemLow, petitionID = resolvePetitionIdentity(t, charDB, ownerGUID, guildName, 10*time.Second)
-			break
-		}
-		lastPushErr = err
-		t.Logf("item push not seen on attempt %d: %v", attempt, err)
-		if attempt < 2 {
-			// Re-ensure money; leave waiter channel intact for a late push from attempt 1.
-			ModMoney(t, w, GuildCharterCostCopper+1_000_000)
-		}
+	push, err := sess.WaitItemPushEntry(ItemGuildCharter, 20*time.Second)
+	if err != nil {
+		t.Fatalf("charter buy failed: no SMSG_ITEM_PUSH_RESULT entry=%d (owner=%d name=%s npc=0x%X): %v",
+			ItemGuildCharter, ownerGUID, guildName, npcGUID, err)
 	}
-	if push == nil {
-		// Do not accept DB petition row as buy success without item push.
-		t.Fatalf("charter buy failed: no SMSG_ITEM_PUSH_RESULT entry=%d (owner=%d name=%s npc=0x%X lastErr=%v)",
-			ItemGuildCharter, ownerGUID, guildName, npcGUID, lastPushErr)
-	}
+	t.Logf("item push OK: entry=%d bag=%d slot=%d count=%d invCount=%d",
+		push.Entry, push.BagSlot, push.ItemSlot, push.Count, push.InventoryCount)
+
+	// Identity only after push — ITEM_PUSH has no item ObjectGuid.
+	itemLow, petitionID := resolvePetitionIdentity(t, charDB, ownerGUID, guildName, 10*time.Second)
 	if itemLow == 0 {
 		t.Fatalf("charter buy: item push OK but petition identity missing (owner=%d name=%s)", ownerGUID, guildName)
 	}

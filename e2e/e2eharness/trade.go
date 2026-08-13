@@ -101,61 +101,175 @@ func (b *ScenarioBot) AcceptTradeWindow(t *testing.T, timeout time.Duration) {
 	b.WaitTradeOpen(t, timeout)
 }
 
-// reseatTradePair teleports both bots onto the Stormwind pad within TRADE_DISTANCE
-// and combatstops. Call before OpenTrade when pad aggro/position drift is likely.
+// reseatTradePair places both bots within TRADE_DISTANCE on the package pad and combatstops.
+// Skips a far tele when already co-located (avoids transfer races right before initiate).
 func reseatTradePair(t *testing.T, a, b *ScenarioBot) {
 	t.Helper()
 	if a == nil || b == nil {
 		return
 	}
-	pad := PadStormwindOutskirts
+	ax, ay, az, am := a.Pos()
+	bx, by, bz, bm := b.Pos()
+	if am == bm && Distance3D(ax, ay, az, bx, by, bz) <= 8 {
+		a.CombatStop(t)
+		b.CombatStop(t)
+		return
+	}
+	pad := PackagePad(t)
 	a.Teleport(t, pad.X, pad.Y, pad.Z, pad.Map)
 	b.Teleport(t, pad.X+1.5, pad.Y, pad.Z, pad.Map)
 	a.CombatStop(t)
 	b.CombatStop(t)
 }
 
-// OpenTrade is a convenience: initiator sends initiate; target begins; both wait TradeOpen.
-// Arms the target's BEGIN_TRADE handler before CMSG_INITIATE_TRADE (no fixed sleep).
-// Reseats both bots within TRADE_DISTANCE before initiate (pad drift / combat noise).
+// clearOpenTrades cancels only when the client believes a window is open.
+//
+// Never send a speculative CMSG_CANCEL_TRADE on a quiet bot: world sessions process
+// packets independently, so a late Cancel on the target can run *after* the
+// initiator's InitiateTrade and destroy the new TradeData (BEGIN_TRADE then
+// TRADE_CANCELED with no OPEN_WINDOW).
+func clearOpenTrades(t *testing.T, bots ...*ScenarioBot) {
+	t.Helper()
+	any := false
+	for _, b := range bots {
+		if b == nil || b.World == nil {
+			continue
+		}
+		if b.World.TradeOpen() {
+			_ = b.World.CancelTrade()
+			any = true
+		}
+	}
+	if any {
+		// Let both sessions finish TradeCancel before the next InitiateTrade.
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+// OpenTrade: initiator InitiateTrade → target BEGIN_TRADE → CMSG_BEGIN_TRADE → both OPEN_WINDOW.
+// Retries under suite load. Failures report both bots' last statuses; TradeStatusBusy==0 so
+// "none" is used when no SMSG_TRADE_STATUS was ever seen.
 func OpenTrade(t *testing.T, initiator, target *ScenarioBot) {
 	t.Helper()
 	if initiator == nil || target == nil {
 		HarnessFailf(t, "OpenTrade: nil bot")
 	}
+
+	// Stay GM-on for pad invuln (no IsGameMaster trade block on AC).
+	initiator.GM(t, ".gm on")
+	target.GM(t, ".gm on")
+	clearOpenTrades(t, initiator, target)
 	reseatTradePair(t, initiator, target)
 
-	// Arm target for BEGIN_TRADE before initiate (FormParty pattern).
-	beginCh := make(chan client.TradeStatusInfo, 1)
-	cancelBegin := target.World.AddTradeStatusHook(func(info client.TradeStatusInfo) {
-		if info.Status == client.TradeStatusBeginTrade {
+	const maxAttempts = 5
+	var lastTgt, lastIni client.TradeStatusInfo
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if attempt > 1 {
+			t.Logf("OpenTrade retry %d: tgtLast=%s iniLast=%s openT=%v openI=%v",
+				attempt,
+				client.TradeStatusName(lastTgt.Status), client.TradeStatusName(lastIni.Status),
+				target.World.TradeOpen(), initiator.World.TradeOpen())
+			clearOpenTrades(t, initiator, target)
+			pad := PackagePad(t)
+			initiator.Teleport(t, pad.X, pad.Y, pad.Z, pad.Map)
+			target.Teleport(t, pad.X+1.5, pad.Y, pad.Z, pad.Map)
+			initiator.CombatStop(t)
+			target.CombatStop(t)
+			time.Sleep(250 * time.Millisecond)
+		}
+
+		beginCh := make(chan client.TradeStatusInfo, 2)
+		cancelBegin := target.World.AddTradeStatusHook(func(info client.TradeStatusInfo) {
+			if info.Status == client.TradeStatusBeginTrade {
+				select {
+				case beginCh <- info:
+				default:
+				}
+			}
+		})
+		failCh := make(chan client.TradeStatusInfo, 4)
+		cancelFail := initiator.World.AddTradeStatusHook(func(info client.TradeStatusInfo) {
+			switch info.Status {
+			case client.TradeStatusBusy, client.TradeStatusBusy2, client.TradeStatusNoTarget,
+				client.TradeStatusTargetTooFar, client.TradeStatusWrongFaction,
+				client.TradeStatusYouDead, client.TradeStatusTargetDead,
+				client.TradeStatusYouStunned, client.TradeStatusTargetStunned,
+				client.TradeStatusTradeCanceled, client.TradeStatusCloseWindow:
+				select {
+				case failCh <- info:
+				default:
+				}
+			}
+		})
+
+		seqBefore := target.World.TradeStatusSeq()
+		initiator.InitiateTrade(t, target)
+
+		gotBegin := false
+		deadline := time.Now().Add(4 * time.Second)
+		for time.Now().Before(deadline) && !gotBegin {
 			select {
-			case beginCh <- info:
-			default:
+			case <-beginCh:
+				gotBegin = true
+			case fail := <-failCh:
+				lastIni = fail
+				// Record only — BEGIN may still arrive; wait until timeout.
+			case <-time.After(40 * time.Millisecond):
+				if target.World.TradeStatusSeq() > seqBefore &&
+					target.World.LastTradeStatus().Status == client.TradeStatusBeginTrade {
+					gotBegin = true
+				}
 			}
 		}
-	})
-
-	initiator.InitiateTrade(t, target)
-
-	select {
-	case <-beginCh:
-	case <-time.After(15 * time.Second):
-		last := target.World.LastTradeStatus()
-		if last.Status != client.TradeStatusBeginTrade {
-			cancelBegin()
-			HarnessFailf(t, "OpenTrade: %s no BEGIN_TRADE within 15s (last=%s)",
-				target.Name, client.TradeStatusName(last.Status))
+		cancelBegin()
+		cancelFail()
+		lastTgt = target.World.LastTradeStatus()
+		if lastIni.Status == 0 && initiator.World.TradeStatusSeen() {
+			lastIni = initiator.World.LastTradeStatus()
 		}
-	}
-	cancelBegin()
 
-	if err := target.World.BeginTrade(); err != nil {
-		HarnessFailf(t, "OpenTrade BeginTrade: %v", err)
+		if !gotBegin {
+			clearOpenTrades(t, initiator, target)
+			continue
+		}
+
+		// BEGIN received — open immediately (no other bot traffic first).
+		if err := target.World.BeginTrade(); err != nil {
+			HarnessFailf(t, "OpenTrade BeginTrade: %v", err)
+		}
+		openDeadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(openDeadline) {
+			if initiator.World.TradeOpen() && target.World.TradeOpen() {
+				return
+			}
+			st := target.World.LastTradeStatus().Status
+			if st == client.TradeStatusTradeCanceled || st == client.TradeStatusCloseWindow ||
+				st == client.TradeStatusTargetTooFar {
+				break
+			}
+			time.Sleep(40 * time.Millisecond)
+		}
+		if initiator.World.TradeOpen() && target.World.TradeOpen() {
+			return
+		}
+		lastTgt = target.World.LastTradeStatus()
+		lastIni = initiator.World.LastTradeStatus()
+		clearOpenTrades(t, initiator, target)
 	}
-	// Both sides should receive OPEN_WINDOW / TradeOpen.
-	target.WaitTradeOpen(t, 15*time.Second)
-	initiator.WaitTradeOpen(t, 15*time.Second)
+
+	ix, iy, iz, im := initiator.Pos()
+	tx, ty, tz, tm := target.Pos()
+	tgtLabel := client.TradeStatusName(lastTgt.Status)
+	if !target.World.TradeStatusSeen() {
+		tgtLabel = "none"
+	}
+	iniLabel := client.TradeStatusName(lastIni.Status)
+	if !initiator.World.TradeStatusSeen() {
+		iniLabel = "none"
+	}
+	HarnessFailf(t, "OpenTrade: %s failed after %d attempts (tgtLast=%s iniLast=%s d=%.1f mapI=%d mapT=%d)",
+		target.Name, maxAttempts, tgtLabel, iniLabel,
+		Distance3D(ix, iy, iz, tx, ty, tz), im, tm)
 }
 
 // SetTradeItem places an inventory item into trade slot.

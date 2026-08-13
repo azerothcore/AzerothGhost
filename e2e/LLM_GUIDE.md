@@ -39,6 +39,24 @@ go test -tags=e2e ./... -count=1 -v -timeout 30m -parallel 1
 
 Optional: `E2E_ALLOW_SOFT_PASS=1` only for local SoftPass debug (fail-closed by default).
 
+### WorldClient log verbosity (`E2E_WORLD_LOG`)
+
+Harness defaults to **Info**: session phases, auth/login, short action GM (`.go`, `.npc`, `.summon`, `.learn`), trade/summon/vehicle protocol, one learn summary after `.learn all`, self `SPELL_FAILURE` with reason name.
+
+| Value | Use |
+|-------|-----|
+| *(unset)* / `info` | Default e2e |
+| `debug` | `SMSG_CAST_FAILED` (+ reason name), character enum, selection, swings, damage, prep GM (`.gm on/off`, `.combatstop`), repeat INITIAL_SPELLS |
+| `trace` | Per-id `SMSG_LEARNED_SPELL` + opcode hex if `TraceLogOpcodes` |
+| `warn` / `error` / `silent` | Quieter CI |
+
+```bash
+# Combat / engage flake triage
+E2E_WORLD_LOG=debug go test -tags=e2e -v ./suites/combat/threat/ -run Engage
+```
+
+Army bots default WorldClient to **Warn** (see `bot/bot.go`); do not point load nodes at `E2E_WORLD_LOG=info`.
+
 ---
 
 ## Always-use APIs
@@ -68,7 +86,11 @@ Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
 **Session lifecycle:** **`WaitInWorld`** (PhaseInWorld after Relog / far tele) · `Relog` (graceful logout+reenter, waits InWorld) · **`HardDisconnect` / `CloseHard`** (socket close, **no** logout — probe with **another** bot via `ProbeWorldAlive` / `AssertWorldAlive`) · `GM` · `TeleportAll` / `TeleportAllPad` · `EnableHostilePvP`
 
-**Assert severity:** `Preconditionf` · `ConfirmedBugf(t, issue, …)` · `HarnessFailf` · `SoftWarnf` · **`Assertf`/`AssertBugf`** (post-drive product oracle). **`SoftPass` is disabled by default** (fails); only `E2E_ALLOW_SOFT_PASS=1` allows it — prefer Preconditionf.
+**Vehicles:** `SpellClick` · **`EnterVehicle(t, guid)`** / **`ExitVehicle`** · **`IsOnVehicle`** / `VehicleGUID` / `WaitOnVehicle` / `WaitNotOnVehicle` · `EnterPlayerVehicle` · fixture **`CreatureStormwindSteed`** (33217) via `Spawn` (cleanup); avoids UNINTERACTIBLE mounts like Mechano-hog
+
+**Instance summon / reset:** **`LeaderResetInstances`** · **3-role ritual:** `ArmSummonRequest` on far → **`RitualSummon(t, initiator, helper, far)`** (portal GO + helper click) → far **`AcceptSummon` / `DeclineSummon`** · `GameObjectUse` · `WaitGameObject` · meeting-stone portal GO **179944** (req 2: initiator+helper)
+
+**Assert severity:** `Preconditionf` · `ConfirmedBugf(t, issue, …)` · `HarnessFailf` · `SoftWarnf` · **`Assertf`/`AssertBugf`** (post-drive product oracle). **`SoftPass` is disabled by default** (fails); only `E2E_ALLOW_SOFT_PASS=1` allows it — prefer Preconditionf. Grep failures: `E2E_FAIL` or `--- FAIL` (routine `SMSG_CAST_FAILED` is Debug-only under default `E2E_WORLD_LOG=info`).
 
 **Hooks (race-safe multi-subscriber):** prefer `AddPacketHook` / `AddTradeStatusHook` / `AddLoot*Hook` / `AddGroup*Hook` / `AddSpellCastResultHook` with cancel; avoid assigning `On*` fields.
 
@@ -130,6 +152,8 @@ Pattern: **Arm → Send → Wait** on a real signal (packet / object cache / pha
 | Post-drive product oracle | `Assertf` / `AssertBugf` |
 | Soft note | `SoftWarnf` |
 | SoftPass | **Fails** unless `E2E_ALLOW_SOFT_PASS=1` — avoid in new tests |
+
+CI log triage: grep `E2E_FAIL` (harness fatals) or go’s `--- FAIL`; do not treat Info-level WorldClient lines as failures (`SMSG_CAST_FAILED` is Debug).
 
 ---
 

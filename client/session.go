@@ -232,5 +232,5 @@ func (w *WorldClient) checkOutboundPhase(opcode uint16) {
 	if w.OnProtocolWarning != nil {
 		w.OnProtocolWarning(msg, opcode, ph)
 	}
-	w.log("PROTOCOL_WARN: %s opcode=%s phase=%s", msg, OpcodeName(opcode), ph)
+	w.logAt(LogWarn, "PROTOCOL_WARN: %s opcode=%s phase=%s", msg, OpcodeName(opcode), ph)
 }

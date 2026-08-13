@@ -41,6 +41,10 @@ type groupInviteHook struct {
 	id HookID
 	fn func(inviterName string, alreadyInGroup bool)
 }
+type groupDeclineHook struct {
+	id HookID
+	fn func(declinerName string)
+}
 type groupListHook struct {
 	id HookID
 	fn func(GroupState)
@@ -408,6 +412,40 @@ func (w *WorldClient) invokeGroupInviteHooks(name string, already bool) {
 	}
 	if legacy != nil {
 		legacy(name, already)
+	}
+}
+
+// AddGroupDeclineHook registers a listener for SMSG_GROUP_DECLINE (leader side).
+func (w *WorldClient) AddGroupDeclineHook(fn func(declinerName string)) (cancel func()) {
+	if fn == nil {
+		return func() {}
+	}
+	w.cbMu.Lock()
+	id := w.nextHookID()
+	w.groupDeclineHooks = append(w.groupDeclineHooks, groupDeclineHook{id: id, fn: fn})
+	w.cbMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			w.cbMu.Lock()
+			out := w.groupDeclineHooks[:0]
+			for _, h := range w.groupDeclineHooks {
+				if h.id != id {
+					out = append(out, h)
+				}
+			}
+			w.groupDeclineHooks = out
+			w.cbMu.Unlock()
+		})
+	}
+}
+
+func (w *WorldClient) invokeGroupDeclineHooks(name string) {
+	w.cbMu.RLock()
+	hooks := append([]groupDeclineHook(nil), w.groupDeclineHooks...)
+	w.cbMu.RUnlock()
+	for _, h := range hooks {
+		h.fn(name)
 	}
 }
 

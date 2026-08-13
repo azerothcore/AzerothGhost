@@ -43,7 +43,9 @@ func CombatReadyDefaults(t *testing.T, w *client.WorldClient) {
 // Pull is accepted when either:
 //   - UNIT_FLAG_IN_COMBAT is set on the target, or
 //   - target HP drops while still alive (training dummies often take .damage / swings
-//     without ever setting IN_COMBAT — Heroic Training Dummy is the common case).
+//     without ever setting IN_COMBAT — Heroic Training Dummy is the common case), or
+//   - the unit is targeting this player (thrash pads may clear IN_COMBAT briefly).
+//
 // Falls back to `.damage 1` (without enabling GM mode) if swings alone do not pull.
 //
 // If the unit dies before a pull is observed (common with L1 target dummies
@@ -66,9 +68,28 @@ func EngageUntilCombat(t *testing.T, w *client.WorldClient, targetGUID uint64, t
 		Preconditionf(t, "EngageUntilCombat: unit 0x%X never appeared in object cache within %s", targetGUID, timeout)
 	}
 
+	// Quiet the bot so pad thrash does not cancel AttackSwing mid-pull.
+	MustGM(t, w, ".combatstop")
+
 	startHP, startMax := UnitHealth(w, targetGUID)
+	if startMax == 0 {
+		// Fields not populated yet — wait briefly for UNIT_FIELD_HEALTH.
+		fieldDeadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(fieldDeadline) {
+			startHP, startMax = UnitHealth(w, targetGUID)
+			if startMax > 0 {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	self := w.CharGUID()
 	pulled := func() bool {
 		if UnitInCombat(w, targetGUID) {
+			return true
+		}
+		// Dummy targeting the puller is a reliable thrash-tolerant oracle.
+		if self != 0 && UnitTargetGUID(w, targetGUID) == self {
 			return true
 		}
 		// Damage-taken oracle: HP reduced, still alive. Training dummies rarely set IN_COMBAT.
@@ -84,30 +105,39 @@ func EngageUntilCombat(t *testing.T, w *client.WorldClient, targetGUID uint64, t
 		if unitDeadOrGone(w, targetGUID) {
 			Preconditionf(t, "unit 0x%X died before combat flag (oneshot? use tankier target e.g. HeroicTrainingDummy)", targetGUID)
 		}
+		if w.GetObject(targetGUID) == nil {
+			// Pad thrash / despawn — fail with a clear message rather than spinning.
+			Preconditionf(t, "unit 0x%X left object cache mid-engage (pad thrash / despawn?)", targetGUID)
+		}
 		_ = w.SetTarget(targetGUID)
 		_ = w.AttackSwing(targetGUID)
-		time.Sleep(400 * time.Millisecond)
+		time.Sleep(350 * time.Millisecond)
 		if pulled() {
 			hp, _ := UnitHealth(w, targetGUID)
-			t.Logf("engaged 0x%X combat=%v hp=%d→%d", targetGUID, UnitInCombat(w, targetGUID), startHP, hp)
+			t.Logf("engaged 0x%X combat=%v targetSelf=%v hp=%d→%d",
+				targetGUID, UnitInCombat(w, targetGUID), UnitTargetGUID(w, targetGUID) == self, startHP, hp)
 			return
 		}
 		if unitDeadOrGone(w, targetGUID) {
 			Preconditionf(t, "unit 0x%X died before combat flag (oneshot? use tankier target e.g. HeroicTrainingDummy)", targetGUID)
 		}
-		// Nudge threat without toggling GM mode.
+		// Nudge threat without toggling GM mode. Re-select first — thrash can steal selection.
 		_ = w.SetTarget(targetGUID)
 		MustGM(t, w, ".damage 1")
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 		if pulled() {
 			hp, _ := UnitHealth(w, targetGUID)
-			t.Logf("engaged 0x%X combat=%v hp=%d→%d (via .damage 1)", targetGUID, UnitInCombat(w, targetGUID), startHP, hp)
+			t.Logf("engaged 0x%X combat=%v targetSelf=%v hp=%d→%d (via .damage 1)",
+				targetGUID, UnitInCombat(w, targetGUID), UnitTargetGUID(w, targetGUID) == self, startHP, hp)
 			return
 		}
 	}
-	hp, _ := UnitHealth(w, targetGUID)
-	Preconditionf(t, "unit 0x%X never pulled within %s (combat=%v hp=%d/%d start=%d)",
-		targetGUID, timeout, UnitInCombat(w, targetGUID), hp, startMax, startHP)
+	hp, max := UnitHealth(w, targetGUID)
+	if max == 0 {
+		max = startMax
+	}
+	Preconditionf(t, "unit 0x%X never pulled within %s (combat=%v hp=%d/%d start=%d obj=%v)",
+		targetGUID, timeout, UnitInCombat(w, targetGUID), hp, max, startHP, w.GetObject(targetGUID) != nil)
 }
 
 // unitDeadOrGone reports zero health for a unit present in this client's cache.

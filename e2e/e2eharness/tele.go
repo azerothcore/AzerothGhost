@@ -59,8 +59,10 @@ var PreferredPackagePads = map[string]string{
 	"social/trade":    "InMountains1",
 	"spells/cast":     "InMountains2",
 	"spells/effects":  "InMountains3",
-	// Remaining suites (smoke, aura, protocol, quests, items, instances, guild)
-	// take free pads or hash-share — lower pad thrash risk.
+	// Combat-lite suites that still spawn/engage must not first-free onto Tower1 under
+	// `go test -p N` (each package is its own process; "first free" → always Tower1).
+	// They share via stable hash among non-preferred pads when possible; when every pad
+	// has a preferred owner they hash-share the pool (see assignPackagePad).
 }
 
 // PadStormwindOutskirts is a legacy alias for AbandonHouse (Elwynn isolation pad).
@@ -108,30 +110,55 @@ func assignPackagePad(key string) (idx int, name string) {
 	if i, ok := packagePadAssign[key]; ok {
 		return i, IsolationPads[i].Name
 	}
+
+	// Preferred combat/social suites always pin their pad — even across `go test -p N`
+	// processes (each process has its own map, so "first free" would collapse every
+	// unlisted suite onto Tower1 and thrash with combat/threat).
+	if pref, ok := PreferredPackagePads[key]; ok {
+		if i, ok := padIndexByName(pref); ok {
+			packagePadAssign[key] = i
+			return i, IsolationPads[i].Name
+		}
+	}
+
+	// Unlisted suites: stable hash so different suite keys spread across pads when
+	// packages run in parallel processes. Prefer pads not reserved by PreferredPackagePads
+	// when any remain free in this process; otherwise hash over the full pool.
 	used := make(map[int]bool, len(packagePadAssign))
 	for _, i := range packagePadAssign {
 		used[i] = true
 	}
-	// Preferred name for known combat suites (only if still free).
-	if pref, ok := PreferredPackagePads[key]; ok {
-		if i, ok := padIndexByName(pref); ok && !used[i] {
-			packagePadAssign[key] = i
-			return i, IsolationPads[i].Name
-		}
-	}
-	// First unused pad.
+	reserved := preferredPadIndices()
+	freeNonPref := make([]int, 0, len(IsolationPads))
 	for i := range IsolationPads {
-		if !used[i] {
-			packagePadAssign[key] = i
-			return i, IsolationPads[i].Name
+		if reserved[i] || used[i] {
+			continue
 		}
+		freeNonPref = append(freeNonPref, i)
 	}
-	// Pool exhausted: stable hash reuse.
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(key))
-	i := int(h.Sum32()) % len(IsolationPads)
+	sum := h.Sum32()
+	if len(freeNonPref) > 0 {
+		i := freeNonPref[int(sum)%len(freeNonPref)]
+		packagePadAssign[key] = i
+		return i, IsolationPads[i].Name
+	}
+	// All pads preferred or in-use in this process: hash-share the full pool.
+	i := int(sum) % len(IsolationPads)
 	packagePadAssign[key] = i
 	return i, IsolationPads[i].Name + "(shared)"
+}
+
+// preferredPadIndices returns pad indexes claimed by PreferredPackagePads.
+func preferredPadIndices() map[int]bool {
+	out := make(map[int]bool, len(PreferredPackagePads))
+	for _, name := range PreferredPackagePads {
+		if i, ok := padIndexByName(name); ok {
+			out[i] = true
+		}
+	}
+	return out
 }
 
 func padIndexByName(name string) (int, bool) {

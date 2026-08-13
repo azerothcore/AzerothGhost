@@ -1,4 +1,5 @@
 //go:build ignore
+
 // scripts/validation/check_spells.go
 // Minimal authoritative data checker (Phase 1 of plan).
 // Usage: go run scripts/validation/check_spells.go
@@ -12,12 +13,12 @@ import (
 )
 
 var expected = map[string]uint32{
-	"warrior.REND":       772,
-	"warrior.EXECUTE":    5308,
+	"warrior.REND":              772,
+	"warrior.EXECUTE":           5308,
 	"warrior.BATTLE_SHOUT_CAST": 2457,
-	"hunter.CALL_PET":    883,
-	"hunter.SERPENT_STING": 1978,
-	"mage.POLYMORPH":     118,
+	"hunter.CALL_PET":           883,
+	"hunter.SERPENT_STING":      1978,
+	"mage.POLYMORPH":            118,
 }
 
 func main() {

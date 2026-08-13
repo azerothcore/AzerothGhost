@@ -282,6 +282,7 @@ func (b *ScenarioBot) Die(t *testing.T) {
 // Strategy (re-select self before every attempt):
 //  1. god off + combatstop (account GM perms still allow .die/.damage)
 //  2. retry `.die` / `.damage 100 pct` / absolute damage
+//
 // Never use `.modify hp 1` — that sets max HP to 1 and can leave the bot stuck at 1/1 alive.
 func (b *ScenarioBot) DieMust(t *testing.T, timeout time.Duration) {
 	t.Helper()

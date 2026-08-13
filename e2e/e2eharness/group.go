@@ -78,6 +78,50 @@ func (b *ScenarioBot) DeclineGroup(t *testing.T) {
 	}
 }
 
+// ArmGroupDecline arms SMSG_GROUP_DECLINE on the inviting leader (sent when invitee declines).
+// Arm on the leader before invitee.DeclineGroup, then wait so GetGroupInvite is cleared
+// server-side before the next Invite (WaitNotInGroup alone is insufficient — invite ≠ membership).
+func (b *ScenarioBot) ArmGroupDecline() (wait func(timeout time.Duration) (string, bool), cancel func()) {
+	ch := make(chan string, 1)
+	cancel = b.World.AddGroupDeclineHook(func(name string) {
+		select {
+		case ch <- name:
+		default:
+		}
+	})
+	wait = func(timeout time.Duration) (string, bool) {
+		if timeout <= 0 {
+			timeout = DefaultGroupTimeout
+		}
+		select {
+		case name := <-ch:
+			return name, true
+		case <-time.After(timeout):
+			return "", false
+		}
+	}
+	return wait, cancel
+}
+
+// DeclineGroupFrom waits for the inviting leader to observe SMSG_GROUP_DECLINE after b declines.
+func (b *ScenarioBot) DeclineGroupFrom(t *testing.T, leader *ScenarioBot) {
+	t.Helper()
+	if leader == nil {
+		b.DeclineGroup(t)
+		return
+	}
+	waitDecl, cancelDecl := leader.ArmGroupDecline()
+	defer cancelDecl()
+	b.DeclineGroup(t)
+	if name, ok := waitDecl(DefaultGroupTimeout); !ok {
+		// Soft: decline may have raced a prior cleanup; still allow callers to proceed with retries.
+		t.Logf("%s DeclineGroupFrom: no SMSG_GROUP_DECLINE on %s within %s", b.Name, leader.Name, DefaultGroupTimeout)
+		return
+	} else {
+		t.Logf("%s declined; leader %s got SMSG_GROUP_DECLINE (%s)", b.Name, leader.Name, name)
+	}
+}
+
 // LeaveGroup sends CMSG_GROUP_DISBAND (leave party on 3.3.5a).
 func (b *ScenarioBot) LeaveGroup(t *testing.T) {
 	t.Helper()
