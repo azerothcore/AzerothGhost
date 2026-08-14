@@ -30,8 +30,8 @@ type NamedPad struct {
 // IsolationPads are far-apart world locations so `go test ./...` can run packages
 // in parallel without sharing one Stormwind AOI. Assigned stickily per suite folder.
 //
-// Source: operator-captured coords (SW towers, Elwynn house, Nagrand islands, Durotar peaks).
-// Icecrown was incomplete in the capture dump — not included until coords are confirmed.
+// Source: operator-captured coords (SW towers, Elwynn house, Nagrand islands, Durotar peaks,
+// Elwynn/Burning Steppes cliffs, Mulgore, Stonetalon, Ashenvale, Felwood, Hyjal).
 var IsolationPads = []NamedPad{
 	{Name: "Tower1", Pos: Position3{X: -9110.266, Y: 470.96655, Z: 137.20119, O: 0.85138357, Map: MapEasternKingdoms}},
 	{Name: "Tower2", Pos: Position3{X: -9043.385, Y: 376.87408, Z: 137.45674, O: 0.7139602, Map: MapEasternKingdoms}},
@@ -43,22 +43,48 @@ var IsolationPads = []NamedPad{
 	{Name: "InMountains1", Pos: Position3{X: 1626.4886, Y: -3638.4875, Z: 215.53114, O: 4.8191752, Map: MapKalimdor}},
 	{Name: "InMountains2", Pos: Position3{X: 1153.9037, Y: -2586.8608, Z: 252.40727, O: 3.7353268, Map: MapKalimdor}},
 	{Name: "InMountains3", Pos: Position3{X: -1945.4078, Y: -3252.7837, Z: 186.5974, O: 2.235215, Map: MapKalimdor}},
+	{Name: "ElwynnRidge", Pos: Position3{X: -8778.654, Y: -1538.7914, Z: 262.44308, O: 4.0515337, Map: MapEasternKingdoms}},
+	{Name: "BurningSteppes", Pos: Position3{X: -8565.869, Y: -1749.3431, Z: 261.832, O: 5.3553014, Map: MapEasternKingdoms}},
+	{Name: "Mulgore1", Pos: Position3{X: -1352.331, Y: 443.73453, Z: 84.17812, O: 1.4135575, Map: MapKalimdor}},
+	{Name: "Mulgore3", Pos: Position3{X: -1346.4855, Y: 607.259, Z: 177.06775, O: 5.291848, Map: MapKalimdor}},
+	{Name: "Mulgore4", Pos: Position3{X: -702.8023, Y: 431.2039, Z: 178.8715, O: 5.9869184, Map: MapKalimdor}},
+	{Name: "Mulgore5", Pos: Position3{X: -499.61398, Y: 314.7678, Z: 178.87077, O: 5.36645, Map: MapKalimdor}},
+	{Name: "MulgoreNorth", Pos: Position3{X: -320.3727, Y: 356.96695, Z: 129.69864, O: 5.986917, Map: MapKalimdor}},
+	{Name: "Boulderslide", Pos: Position3{X: -248.6124, Y: -20.980942, Z: 68.75001, O: 5.3389664, Map: MapKalimdor}},
+	{Name: "Stonetalon1", Pos: Position3{X: -316.0851, Y: -184.31485, Z: 88.23334, O: 4.5300026, Map: MapKalimdor}},
+	{Name: "Stonetalon2", Pos: Position3{X: 866.51086, Y: -56.30018, Z: 229.49576, O: 6.03796, Map: MapKalimdor}},
+	{Name: "Talondeep", Pos: Position3{X: 1684.0914, Y: -724.9744, Z: 212.20335, O: 3.952735, Map: MapKalimdor}},
+	{Name: "Ashenvale1", Pos: Position3{X: 1771.8456, Y: -598.2746, Z: 219.08276, O: 5.884814, Map: MapKalimdor}},
+	{Name: "FelwoodSouth", Pos: Position3{X: 3396.1155, Y: -1939.8342, Z: 441.16708, O: 6.273577, Map: MapKalimdor}},
+	{Name: "MorlosAran", Pos: Position3{X: 3642.7356, Y: -1818.3837, Z: 432.13553, O: 3.2812169, Map: MapKalimdor}},
+	{Name: "HyjalApproach", Pos: Position3{X: 4103.3022, Y: -2080.1174, Z: 776.1862, O: 0.81508166, Map: MapKalimdor}},
+	{Name: "Hyjal1", Pos: Position3{X: 4516.697, Y: -2312.1873, Z: 1137.8563, O: 2.959214, Map: MapKalimdor}},
+	{Name: "Hyjal2", Pos: Position3{X: 4591.0117, Y: -2661.0393, Z: 1133.3715, O: 3.6935647, Map: MapKalimdor}},
 }
 
 // PreferredPackagePads maps suite keys (relative to e2e/suites/ or "smoke") to pad names.
 // Keep this 1:1 with IsolationPads for combat-heavy packages. Suites not listed get
 // an unused pad if any remain, otherwise a stable hash share.
 var PreferredPackagePads = map[string]string{
-	"combat/threat":   "Tower1",
-	"combat/death":    "Tower2",
-	"combat/pets":     "AbandonHouse",
-	"combat/charm":    "NagrandArena",
-	"combat/vehicles": "FloatingIsland1",
-	"social/loot":     "FloatingIsland2",
-	"social/group":    "FloatingIsland3",
-	"social/trade":    "InMountains1",
-	"spells/cast":     "InMountains2",
-	"spells/effects":  "InMountains3",
+	"combat/threat":              "Tower1",
+	"combat/death":               "Tower2",
+	"combat/pets":                "AbandonHouse",
+	"combat/charm":               "NagrandArena",
+	"combat/vehicles":            "FloatingIsland1",
+	"social/loot":                "FloatingIsland2",
+	"social/group":               "FloatingIsland3",
+	"social/trade":               "InMountains1",
+	"spells/cast":                "InMountains2",
+	"spells/effects":             "InMountains3",
+	"spells/aura":                "Boulderslide",
+	"quests/escort":              "Mulgore1",
+	"quests/lifecycle":           "Mulgore3",
+	"items/equip":                "Stonetalon1",
+	"smoke":                      "ElwynnRidge",
+	"protocol/session":           "Mulgore4",
+	"protocol/teleport":          "Mulgore5",
+	"guild/charter_bank":         "Stonetalon2",
+	"instances/northrend/ulduar": "Ashenvale1",
 	// Combat-lite suites that still spawn/engage must not first-free onto Tower1 under
 	// `go test -p N` (each package is its own process; "first free" → always Tower1).
 	// They share via stable hash among non-preferred pads when possible; when every pad

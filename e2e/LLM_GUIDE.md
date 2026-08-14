@@ -102,7 +102,7 @@ Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
 **Pets / Risen Ghoul / guardians:** `NewSolo`/`NewScenario` register `CleanupOwnedSummons` on cleanup (dismiss pet + despawn SUMMONEDBY/CREATEDBY units: Risen Ghoul 26125, imps, totems…). After Raise Dead / heavy summons, also call `bot.CleanupOwnedSummons(t)` while still InWorld.
 
-**Pad isolation:** `go test ./... -parallel 1` → packages still parallel, tests **serial within package**. Use **`e2eharness.PackagePad(t)`** (sticky per suite folder for process life). Pads: Tower1/2, AbandonHouse (EK); NagrandArena + FloatingIsland1–3 (Outland); InMountains1–3 (Kalimdor). Preferred map for combat/social suites in harness `PreferredPackagePads`. Never park every suite on one SW cell.
+**Pad isolation:** `go test ./... -parallel 1` → packages still parallel, tests **serial within package**. Use **`e2eharness.PackagePad(t)`** (sticky per suite folder for process life). 27 IsolationPads (EK towers/Elwynn/Burning Steppes; Outland islands; Kalimdor mountains/Mulgore/Stonetalon/Ashenvale/Felwood/Hyjal). Preferred combat/social suites in `PreferredPackagePads`. Never park every suite on one SW cell.
 
 **Spawn cleanup path:** persistent adds → SQL DELETE + soft live despawn (`DespawnCreatureSpawn` / `DespawnGameObjectSpawn`). Safe after session close for SQL half; never bare add.
 
