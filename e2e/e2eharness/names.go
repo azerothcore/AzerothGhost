@@ -29,6 +29,16 @@ func SanitizeCharName(s string) string {
 	for i := 1; i < len(runes); i++ {
 		runes[i] = unicode.ToLower(runes[i])
 	}
+	// 3.3.5a rejects three identical letters in a row (CHAR_NAME_THREE_CONSECUTIVE = 0x62).
+	for i := 2; i < len(runes); i++ {
+		if runes[i] == runes[i-1] && runes[i] == runes[i-2] {
+			if runes[i] == 'z' {
+				runes[i] = 'a'
+			} else {
+				runes[i]++
+			}
+		}
+	}
 	return string(runes)
 }
 

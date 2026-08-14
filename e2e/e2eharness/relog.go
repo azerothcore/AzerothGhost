@@ -57,9 +57,11 @@ func WaitInWorld(t *testing.T, w *client.WorldClient, timeout time.Duration) {
 func (b *ScenarioBot) Relog(t *testing.T) {
 	t.Helper()
 	account := b.Ident.Account
-	charName := b.Ident.CharName
-	if charName == "" && b.Session != nil {
-		charName = b.Name
+	// Use the character actually in-world. Ident.CharName is the *requested*
+	// create name and can differ when UniqueLetterNames had to skip CHAR_NAME_THREE_CONSECUTIVE.
+	charName := b.Name
+	if charName == "" {
+		charName = b.Ident.CharName
 	}
 	race, class := b.Ident.Race, b.Ident.Class
 	if race == 0 {
@@ -88,15 +90,16 @@ func (b *ScenarioBot) Relog(t *testing.T) {
 	s := sessions[0]
 	b.Session = s
 	b.Ident.Account = account
-	b.Ident.CharName = charName
+	b.Ident.CharName = s.Name
 	b.Ident.Race = race
 	b.Ident.Class = class
-	if s.GUID != oldGUID && s.GUID != 0 && oldGUID != 0 {
-		t.Logf("WARNING: relog GUID 0x%X != original 0x%X", s.GUID, oldGUID)
+	if oldGUID != 0 && s.GUID != oldGUID {
+		HarnessFailf(t, "relog entered a different character (guid=0x%X want 0x%X name=%q requested=%q)",
+			s.GUID, oldGUID, s.Name, charName)
 	}
 	// LoginBots already waits for login; re-assert PhaseInWorld for authors.
 	b.WaitInWorld(t, DefaultInWorldTimeout)
-	t.Logf("relogged %s char=%s guid=0x%X phase=%s", account, charName, s.GUID, b.World.SessionPhase())
+	t.Logf("relogged %s char=%s guid=0x%X phase=%s", account, s.Name, s.GUID, b.World.SessionPhase())
 }
 
 // HardDisconnect forcibly closes the world socket without CMSG_LOGOUT_REQUEST /

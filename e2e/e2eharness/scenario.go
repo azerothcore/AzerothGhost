@@ -258,11 +258,15 @@ func NewScenario(t *testing.T, opt ScenarioOpts) []*ScenarioBot {
 	bots := make([]*ScenarioBot, len(sessions))
 	for i, s := range sessions {
 		sp := specs[i]
+		id := idents[i]
+		if s.Name != "" {
+			id.CharName = s.Name
+		}
 		bots[i] = &ScenarioBot{
 			Session: s,
 			AuthDB:  authDB,
 			CharDB:  charDB,
-			Ident:   idents[i],
+			Ident:   id,
 			Role:    sp.Role,
 		}
 		if enableGM {
