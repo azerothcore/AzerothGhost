@@ -66,7 +66,7 @@ Army bots default WorldClient to **Warn** (see `bot/bot.go`); do not point load 
 **Place:** **`PackagePad(t)`** (sticky per suite folder) · `Teleport` · `TeleportPad` · `TeleportAll` / **`TeleportAllPad`** · `TeleNamed` · `GoCreatureID` · `GoCreatureGUID` · `WaitUnit` · `WaitUnitAny` · `FindUnit` · `Pos` · `DistFrom` · **`AssertNear`** / **`AssertNearPad`** / **`AssertMoved`** · `Distance3D` · maps `MapEasternKingdoms|Kalimdor|Outland|Northrend|Ulduar`  
 Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
-**Combat:** `CombatReady` / `CombatReadyFull` (end with `FlushWorld`) · `Engage` · `Damage` · `DamageKill` (never toggle `.gm on`) · `Attack` · `UnitInCombat` · `WaitUnitCombat` · `WaitUnitDead` · `UnitHP` · `UnitTarget` · `WaitUnitTarget` · `AssertUnitTarget`
+**Combat:** `CombatReady` / `CombatReadyFull` (end with `FlushWorld`) · `Engage` (no FlushWorld — bosses evade) · `Damage` · `DamageKill` (never toggle `.gm on`) · `Attack` · `UnitInCombat` · `WaitUnitCombat` · `WaitUnitDead` · `UnitHP` · `UnitTarget` · `WaitUnitTarget` · `AssertUnitTarget`
 
 **Cast:** `Cast` · `CastMust` · `TryCast` · `CastOrGM` · `CastRetries` · `CastAtPosition` · `CastSelfGM` · `Learn` · `LearnAll` · `Face` · `SpellFailReasonName` · `DefaultCastTimeout` · `PlayerPower` · `IsChanneling` / `ChannelSpell` · `WaitChanneling` / `WaitNotChanneling` · `CancelCast` · `CancelAura`
 

@@ -71,8 +71,9 @@ func EngageUntilCombat(t *testing.T, w *client.WorldClient, targetGUID uint64, t
 	}
 
 	// Quiet the bot so pad thrash does not cancel AttackSwing mid-pull.
+	// Do not FlushWorld here: .gps uses the selected unit and delays the
+	// pull; bosses (Freya) can evade/despawn and drop out of the object cache.
 	MustGM(t, w, ".combatstop")
-	FlushWorld(t, w)
 
 	startHP, startMax := UnitHealth(w, targetGUID)
 	if startMax == 0 {
