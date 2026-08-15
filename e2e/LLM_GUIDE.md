@@ -66,7 +66,7 @@ Army bots default WorldClient to **Warn** (see `bot/bot.go`); do not point load 
 **Place:** **`PackagePad(t)`** (sticky per suite folder) · `Teleport` · `TeleportPad` · `TeleportAll` / **`TeleportAllPad`** · `TeleNamed` · `GoCreatureID` · `GoCreatureGUID` · `WaitUnit` · `WaitUnitAny` · `FindUnit` · `Pos` · `DistFrom` · **`AssertNear`** / **`AssertNearPad`** / **`AssertMoved`** · `Distance3D` · maps `MapEasternKingdoms|Kalimdor|Outland|Northrend|Ulduar`  
 Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
-**Combat:** `CombatReady` / `CombatReadyFull` · `Engage` · `Damage` · `DamageKill` (never toggle `.gm on`) · `Attack` · `UnitInCombat` · `WaitUnitCombat` · `WaitUnitDead` · `UnitHP` · `UnitTarget` · `WaitUnitTarget` · `AssertUnitTarget`
+**Combat:** `CombatReady` / `CombatReadyFull` (end with `FlushWorld`) · `Engage` · `Damage` · `DamageKill` (never toggle `.gm on`) · `Attack` · `UnitInCombat` · `WaitUnitCombat` · `WaitUnitDead` · `UnitHP` · `UnitTarget` · `WaitUnitTarget` · `AssertUnitTarget`
 
 **Cast:** `Cast` · `CastMust` · `TryCast` · `CastOrGM` · `CastRetries` · `CastAtPosition` · `CastSelfGM` · `Learn` · `LearnAll` · `Face` · `SpellFailReasonName` · `DefaultCastTimeout` · `PlayerPower` · `IsChanneling` / `ChannelSpell` · `WaitChanneling` / `WaitNotChanneling` · `CancelCast` · `CancelAura`
 
@@ -84,7 +84,7 @@ Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
 **Observe:** `Spawn` · `UnitsByEntry` · `WaitNewUnits` · package `NewSpawnSetTracker` · `LivingByEntries` · `AssertIntervalNotAccelerated` · `ObserveUnitTargets`
 
-**Session lifecycle:** **`WaitInWorld`** (PhaseInWorld after Relog / far tele) · `Relog` (graceful logout+reenter, waits InWorld) · **`HardDisconnect` / `CloseHard`** (socket close, **no** logout — probe with **another** bot via `ProbeWorldAlive` / `AssertWorldAlive`) · `GM` · `TeleportAll` / `TeleportAllPad` · `EnableHostilePvP`
+**Session lifecycle:** **`WaitInWorld`** (PhaseInWorld after Relog / far tele) · `Relog` (graceful logout+reenter, waits InWorld) · **`HardDisconnect` / `CloseHard`** (socket close, **no** logout — probe with **another** bot via `ProbeWorldAlive` / `AssertWorldAlive`) · `GM` · **`FlushWorld`** (`.gps` → `SMSG_MESSAGECHAT`: same-session MustGM before this call is applied) · `TeleportAll` / `TeleportAllPad` · `EnableHostilePvP` · **`WaitUnitPvP`**
 
 **Vehicles:** `SpellClick` · **`EnterVehicle(t, guid)`** / **`ExitVehicle`** · **`IsOnVehicle`** / `VehicleGUID` / `WaitOnVehicle` / `WaitNotOnVehicle` · `EnterPlayerVehicle` · fixture **`CreatureStormwindSteed`** (33217) via `Spawn` (cleanup); avoids UNINTERACTIBLE mounts like Mechano-hog
 

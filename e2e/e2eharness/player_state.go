@@ -290,6 +290,37 @@ func (b *ScenarioBot) UnitAuraStacks(guid uint64, spellID uint32) int {
 
 // --- target waiters ---
 
+// UnitIsPvP reports UNIT_BYTE2_FLAG_PVP on a cached unit (false if unknown).
+func UnitIsPvP(w *client.WorldClient, guid uint64) bool {
+	if w == nil || guid == 0 {
+		return false
+	}
+	obj := w.GetObject(guid)
+	return obj != nil && obj.IsPvP()
+}
+
+// WaitUnitPvP waits until the unit is PvP-flagged in this client's object cache.
+func WaitUnitPvP(t *testing.T, w *client.WorldClient, guid uint64, timeout time.Duration) {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if UnitIsPvP(w, guid) {
+			return
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	Preconditionf(t, "unit 0x%X not PvP-flagged within %s", guid, timeout)
+}
+
+// WaitUnitPvP waits until guid is PvP-flagged in this bot's object cache.
+func (b *ScenarioBot) WaitUnitPvP(t *testing.T, guid uint64, timeout time.Duration) {
+	t.Helper()
+	WaitUnitPvP(t, b.World, guid, timeout)
+}
+
 // WaitUnitTarget waits until unit guid's UNIT_FIELD_TARGET equals wantTarget
 // (wantTarget==0 waits for clear target).
 func (b *ScenarioBot) WaitUnitTarget(t *testing.T, guid, wantTarget uint64, timeout time.Duration) {

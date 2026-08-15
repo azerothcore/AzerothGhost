@@ -722,10 +722,12 @@ func (b *ScenarioBot) GiveTotems(t *testing.T) {
 }
 
 // EnablePvP turns on PvP and disables GM mode (GM can suppress PvP).
+// FlushWorld after the pair so this session has applied both before return.
 func (b *ScenarioBot) EnablePvP(t *testing.T) {
 	t.Helper()
 	MustGM(t, b.World, ".pvp on")
 	MustGM(t, b.World, ".gm off")
+	FlushWorld(t, b.World)
 }
 
 // --- multi-bot conveniences ---

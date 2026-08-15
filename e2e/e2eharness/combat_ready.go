@@ -31,6 +31,8 @@ func CombatReady(t *testing.T, w *client.WorldClient, opts CombatReadyOpts) {
 	if opts.Power {
 		CheatPower(t, w)
 	}
+	// Same-session GM above is fire-and-forget; ack before the caller casts/pulls.
+	FlushWorld(t, w)
 }
 
 // CombatReadyDefaults is CombatReady with god on (power off).
@@ -70,6 +72,7 @@ func EngageUntilCombat(t *testing.T, w *client.WorldClient, targetGUID uint64, t
 
 	// Quiet the bot so pad thrash does not cancel AttackSwing mid-pull.
 	MustGM(t, w, ".combatstop")
+	FlushWorld(t, w)
 
 	startHP, startMax := UnitHealth(w, targetGUID)
 	if startMax == 0 {

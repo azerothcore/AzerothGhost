@@ -122,7 +122,7 @@ const (
 	SmsgRemovedSpell    uint16 = 0x0203
 	SmsgCooldownEvent   uint16 = 0x0135
 	SmsgClearCooldown   uint16 = 0x01DE
-	CmsgCancelCast uint16 = 0x012F
+	CmsgCancelCast      uint16 = 0x012F
 	// CMSG_CANCEL_AURA = 0x136 on 3.3.5a (AC Opcodes.h). 0x133 is SMSG_SPELL_FAILURE only;
 	// using 0x133 made CancelAura a silent no-op server-side.
 	CmsgCancelAura uint16 = 0x0136
@@ -310,26 +310,28 @@ const (
 
 // Unit fields from AzerothCore UpdateFields.h (OBJECT_END = 0x0006)
 const (
-	ObjectFieldGUID          = 0x0000 // 2 uint32s
-	ObjectFieldType          = 0x0002
-	UnitFieldEntry           = 0x0003 // OBJECT_FIELD_ENTRY
-	UnitFieldCharm           = 0x0006 // OBJECT_END + 0x0000 (2 uint32s = GUID)
-	UnitFieldSummon          = 0x0008 // OBJECT_END + 0x0002 (2 uint32s = GUID) — active pet
-	UnitFieldCharmedBy       = 0x000C // OBJECT_END + 0x0006
-	UnitFieldSummonedBy      = 0x000E // OBJECT_END + 0x0008
-	UnitFieldCreatedBy       = 0x0010 // OBJECT_END + 0x000A
-	UnitFieldTarget          = 0x0012 // OBJECT_END + 0x000C = 0x0012 (2 uint32s = GUID)
-	UnitFieldChannelObject   = 0x0014 // OBJECT_END + 0x000E
-	UnitChannelSpell         = 0x0016 // OBJECT_END + 0x0010
-	UnitFieldBytes0          = 0x0017 // OBJECT_END + 0x0011 = 0x0017 (race, class, gender, powertype)
-	UnitFieldHealth          = 0x0018 // OBJECT_END + 0x0012
-	UnitFieldPower1          = 0x0019 // OBJECT_END + 0x0013 (mana/rage/energy)
-	UnitFieldMaxHealth       = 0x0020 // OBJECT_END + 0x001A
-	UnitFieldMaxPower1       = 0x0021 // OBJECT_END + 0x001B
-	UnitFieldLevel           = 0x0036 // OBJECT_END + 0x0030
-	UnitFieldFaction         = 0x0037 // OBJECT_END + 0x0031 (faction template)
-	UnitFieldFlags           = 0x003B // OBJECT_END + 0x0035
-	UnitFieldFlags2          = 0x003C // OBJECT_END + 0x0036
+	ObjectFieldGUID        = 0x0000 // 2 uint32s
+	ObjectFieldType        = 0x0002
+	UnitFieldEntry         = 0x0003 // OBJECT_FIELD_ENTRY
+	UnitFieldCharm         = 0x0006 // OBJECT_END + 0x0000 (2 uint32s = GUID)
+	UnitFieldSummon        = 0x0008 // OBJECT_END + 0x0002 (2 uint32s = GUID) — active pet
+	UnitFieldCharmedBy     = 0x000C // OBJECT_END + 0x0006
+	UnitFieldSummonedBy    = 0x000E // OBJECT_END + 0x0008
+	UnitFieldCreatedBy     = 0x0010 // OBJECT_END + 0x000A
+	UnitFieldTarget        = 0x0012 // OBJECT_END + 0x000C = 0x0012 (2 uint32s = GUID)
+	UnitFieldChannelObject = 0x0014 // OBJECT_END + 0x000E
+	UnitChannelSpell       = 0x0016 // OBJECT_END + 0x0010
+	UnitFieldBytes0        = 0x0017 // OBJECT_END + 0x0011 = 0x0017 (race, class, gender, powertype)
+	UnitFieldHealth        = 0x0018 // OBJECT_END + 0x0012
+	UnitFieldPower1        = 0x0019 // OBJECT_END + 0x0013 (mana/rage/energy)
+	UnitFieldMaxHealth     = 0x0020 // OBJECT_END + 0x001A
+	UnitFieldMaxPower1     = 0x0021 // OBJECT_END + 0x001B
+	UnitFieldLevel         = 0x0036 // OBJECT_END + 0x0030
+	UnitFieldFaction       = 0x0037 // OBJECT_END + 0x0031 (faction template)
+	UnitFieldFlags         = 0x003B // OBJECT_END + 0x0035
+	UnitFieldFlags2        = 0x003C // OBJECT_END + 0x0036
+	// UNIT_FIELD_BYTES_2 = OBJECT_END + 0x0074 (sheath / PvP / FFA / sanctuary).
+	UnitFieldBytes2          = 0x007A
 	UnitFieldDisplayID       = 0x0043 // OBJECT_END + 0x003D
 	UnitFieldNativeDisplayID = 0x0044 // OBJECT_END + 0x003E
 	UnitDynamicFlags         = 0x004F // OBJECT_END + 0x0049
@@ -398,6 +400,13 @@ const (
 	UnitFlagStunned        uint32 = 0x00040000
 	UnitFlagDead           uint32 = 0x20000000
 	UnitFlagTaxiFlight     uint32 = 0x00100000 // from AC UnitDefines.h - must skip for attack (see _IsValidAttackTarget)
+)
+
+// UNIT_FIELD_BYTES_2 byte 1 (UnitPVPStateFlags).
+const (
+	UnitByte2FlagPvP       uint32 = 0x01
+	UnitByte2FlagFFAPvP    uint32 = 0x04
+	UnitByte2FlagSanctuary uint32 = 0x08
 )
 
 // CharEnumEntry holds character data from SMSG_CHAR_ENUM
@@ -550,6 +559,16 @@ func (o *WorldObject) setValue(field uint16, v uint32) {
 // Health returns the current health of the object, or 0 if unknown.
 func (o *WorldObject) Health() uint32 {
 	return o.value(UnitFieldHealth)
+}
+
+// PvPStateByte is UNIT_FIELD_BYTES_2 byte 1 (PVP / FFA / sanctuary).
+func (o *WorldObject) PvPStateByte() uint8 {
+	return uint8(o.value(UnitFieldBytes2) >> 8)
+}
+
+// IsPvP reports UNIT_BYTE2_FLAG_PVP on this object.
+func (o *WorldObject) IsPvP() bool {
+	return o.PvPStateByte()&uint8(UnitByte2FlagPvP) != 0
 }
 
 // MaxHealth returns the maximum health of the object, or 0 if unknown.
