@@ -126,6 +126,8 @@ const (
 	// CMSG_CANCEL_AURA = 0x136 on 3.3.5a (AC Opcodes.h). 0x133 is SMSG_SPELL_FAILURE only;
 	// using 0x133 made CancelAura a silent no-op server-side.
 	CmsgCancelAura uint16 = 0x0136
+	// CMSG_TOGGLE_PVP = 0x253. Payload: optional uint8 (1 = on, 0 = off).
+	CmsgTogglePvp uint16 = 0x0253
 
 	// Update object opcodes
 	SmsgUpdateObject         uint16 = 0x00A9
@@ -2855,6 +2857,21 @@ func (w *WorldClient) PlayerPetGUID() uint64 {
 		return 0
 	}
 	return obj.GUIDField(UnitFieldSummon)
+}
+
+// SetPvP sends CMSG_TOGGLE_PVP with an explicit on/off byte (AC ApplyModFlag).
+func (w *WorldClient) SetPvP(on bool) error {
+	v := uint8(0)
+	if on {
+		v = 1
+	}
+	return w.sendPacket(CmsgTogglePvp, []byte{v})
+}
+
+// SelfIsPvP reports UNIT_BYTE2_FLAG_PVP on the player's own object.
+func (w *WorldClient) SelfIsPvP() bool {
+	obj := w.GetObject(w.CharGUID())
+	return obj != nil && obj.IsPvP()
 }
 
 // CancelAura sends CMSG_CANCEL_AURA for spellID.

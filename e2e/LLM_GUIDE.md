@@ -84,7 +84,7 @@ Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
 **Observe:** `Spawn` · `UnitsByEntry` · `WaitNewUnits` · package `NewSpawnSetTracker` · `LivingByEntries` · `AssertIntervalNotAccelerated` · `ObserveUnitTargets`
 
-**Session lifecycle:** **`WaitInWorld`** (PhaseInWorld after Relog / far tele) · `Relog` (graceful logout+reenter, waits InWorld) · **`HardDisconnect` / `CloseHard`** (socket close, **no** logout — probe with **another** bot via `ProbeWorldAlive` / `AssertWorldAlive`) · `GM` · **`FlushWorld`** (`.gps` → `SMSG_MESSAGECHAT`: same-session MustGM before this call is applied) · `TeleportAll` / `TeleportAllPad` · `EnableHostilePvP` · **`WaitUnitPvP`**
+**Session lifecycle:** **`WaitInWorld`** (PhaseInWorld after Relog / far tele) · `Relog` (graceful logout+reenter, waits InWorld) · **`HardDisconnect` / `CloseHard`** (socket close, **no** logout — probe with **another** bot via `ProbeWorldAlive` / `AssertWorldAlive`) · `GM` · **`FlushWorld`** (`.gps` → `SMSG_MESSAGECHAT`: same-session MustGM before this call is applied) · `TeleportAll` / `TeleportAllPad` · `EnableHostilePvP` (`CMSG_TOGGLE_PVP` + `WaitSelfPvP`) · **`WaitSelfPvP` / `WaitUnitPvP`**
 
 **Vehicles:** `SpellClick` · **`EnterVehicle(t, guid)`** / **`ExitVehicle`** · **`IsOnVehicle`** / `VehicleGUID` / `WaitOnVehicle` / `WaitNotOnVehicle` · `EnterPlayerVehicle` · fixture **`CreatureStormwindSteed`** (33217) via `Spawn` (cleanup); avoids UNINTERACTIBLE mounts like Mechano-hog
 

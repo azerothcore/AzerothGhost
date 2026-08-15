@@ -321,6 +321,28 @@ func (b *ScenarioBot) WaitUnitPvP(t *testing.T, guid uint64, timeout time.Durati
 	WaitUnitPvP(t, b.World, guid, timeout)
 }
 
+// WaitSelfPvP waits until this session's own player object is PvP-flagged.
+func WaitSelfPvP(t *testing.T, w *client.WorldClient, timeout time.Duration) {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if w.SelfIsPvP() {
+			return
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	Preconditionf(t, "self not PvP-flagged within %s (guid=0x%X)", timeout, w.CharGUID())
+}
+
+// WaitSelfPvP waits until this bot's own player object is PvP-flagged.
+func (b *ScenarioBot) WaitSelfPvP(t *testing.T, timeout time.Duration) {
+	t.Helper()
+	WaitSelfPvP(t, b.World, timeout)
+}
+
 // WaitUnitTarget waits until unit guid's UNIT_FIELD_TARGET equals wantTarget
 // (wantTarget==0 waits for clear target).
 func (b *ScenarioBot) WaitUnitTarget(t *testing.T, guid, wantTarget uint64, timeout time.Duration) {

@@ -721,13 +721,17 @@ func (b *ScenarioBot) GiveTotems(t *testing.T) {
 	GiveShamanTotems(t, b.World)
 }
 
-// EnablePvP turns on PvP and disables GM mode (GM can suppress PvP).
-// FlushWorld after the pair so this session has applied both before return.
+// EnablePvP disables GM mode and flags the player for PvP via CMSG_TOGGLE_PVP
+// (AC has no `.pvp on` command). FlushWorld acks `.gm off`; WaitSelfPvP waits
+// for UNIT_BYTE2_FLAG_PVP on this session's own object.
 func (b *ScenarioBot) EnablePvP(t *testing.T) {
 	t.Helper()
-	MustGM(t, b.World, ".pvp on")
 	MustGM(t, b.World, ".gm off")
 	FlushWorld(t, b.World)
+	if err := b.World.SetPvP(true); err != nil {
+		Preconditionf(t, "CMSG_TOGGLE_PVP: %v", err)
+	}
+	WaitSelfPvP(t, b.World, 5*time.Second)
 }
 
 // --- multi-bot conveniences ---
