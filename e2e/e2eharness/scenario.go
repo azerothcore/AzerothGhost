@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // 3.3.5a race / class IDs used by character create.

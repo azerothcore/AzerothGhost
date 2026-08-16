@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/navigation"
+	"github.com/azerothcore/AzerothGhost/navigation"
 )
 
 // recordedPacket is what our fake sender captures during simulated ticks.

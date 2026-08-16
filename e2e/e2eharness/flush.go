@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // FlushWorld sends `.gps` and waits for SMSG_MESSAGECHAT.

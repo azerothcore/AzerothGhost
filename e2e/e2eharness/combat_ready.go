@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // CombatReadyOpts configures CombatReady.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // SpellCastResult is the outcome of a CMSG_CAST_SPELL attempt.

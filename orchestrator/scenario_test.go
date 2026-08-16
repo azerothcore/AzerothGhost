@@ -5,7 +5,7 @@ import (
 
 	lua "github.com/Shopify/go-lua"
 
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 func TestLuaValueToBundleString(t *testing.T) {

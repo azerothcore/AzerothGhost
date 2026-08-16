@@ -1,6 +1,6 @@
-module github.com/walkline/AzerothGhost
+module github.com/azerothcore/AzerothGhost
 
-go 1.24.0
+go 1.26.0
 
 replace github.com/o0olele/detour-go => github.com/walkline/detour-go v0.0.0-20260624174442-8056537019f8
 

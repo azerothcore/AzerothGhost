@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // objectEntryFromGUID extracts the 24-bit entry field from a map-specific

@@ -8,7 +8,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/e2e/e2eharness"
+	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
 
 // Example: tele to a named boss pad, enter melee, pull, observe Allies waves.

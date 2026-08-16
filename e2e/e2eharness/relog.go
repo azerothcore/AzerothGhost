@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // DefaultInWorldTimeout is used by WaitInWorld when timeout <= 0.

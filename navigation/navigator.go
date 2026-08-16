@@ -8,7 +8,7 @@ import (
 	"math"
 	"sync"
 
-	"github.com/walkline/AzerothGhost/pathfinding"
+	"github.com/azerothcore/AzerothGhost/pathfinding"
 )
 
 // Point3D is a 3D position in game world coordinates.

@@ -4,8 +4,8 @@ import (
 	"math"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
-	"github.com/walkline/AzerothGhost/navigation"
+	"github.com/azerothcore/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/navigation"
 )
 
 // MovementSender is the interface used by MovementController to emit movement packets.

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/ai/luaengine"
-	"github.com/walkline/AzerothGhost/client"
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/ai/luaengine"
+	"github.com/azerothcore/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 // TestNewBotDefaults verifies defaults applied in NewBot.

@@ -15,13 +15,13 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/ai/behaviortree"
-	"github.com/walkline/AzerothGhost/ai/luaengine"
-	"github.com/walkline/AzerothGhost/client"
-	"github.com/walkline/AzerothGhost/gamedata"
-	"github.com/walkline/AzerothGhost/movement"
-	"github.com/walkline/AzerothGhost/navigation"
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/ai/behaviortree"
+	"github.com/azerothcore/AzerothGhost/ai/luaengine"
+	"github.com/azerothcore/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/gamedata"
+	"github.com/azerothcore/AzerothGhost/movement"
+	"github.com/azerothcore/AzerothGhost/navigation"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 var _ scenario.AIBundle // ensure import is used (AIBundle support wiring)

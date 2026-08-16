@@ -7,7 +7,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/e2e/e2eharness"
+	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
 
 // Example: buy a guild charter via the tabard designer (Session-style guild path).

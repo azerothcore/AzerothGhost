@@ -16,8 +16,8 @@ import (
 	lua "github.com/Shopify/go-lua"
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/bot"
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/bot"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 // SRP6 parameters matching AzerothCore's implementation

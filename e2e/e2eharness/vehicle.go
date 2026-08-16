@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // CreatureStormwindSteed is a friendly outdoor vehicle (VehicleId=349, SPELLCLICK, no zone script).

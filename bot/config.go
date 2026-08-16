@@ -1,7 +1,7 @@
 package bot
 
 import (
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 // Config holds configuration for a bot instance.

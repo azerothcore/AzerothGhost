@@ -3,7 +3,7 @@ package bot
 import (
 	"testing"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // TestSummonNearTeleport_InterruptsAndFlagsLua mirrors the log sequence:

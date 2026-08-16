@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // DefaultTradeTimeout is used by trade waiters when timeout <= 0.

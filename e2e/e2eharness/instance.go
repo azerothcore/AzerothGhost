@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // DefaultSummonTimeout is used by summon waiters when timeout <= 0.

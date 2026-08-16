@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/walkline/AzerothGhost/bot"
-	"github.com/walkline/AzerothGhost/config"
-	"github.com/walkline/AzerothGhost/orchestrator"
-	"github.com/walkline/AzerothGhost/server"
+	"github.com/azerothcore/AzerothGhost/bot"
+	"github.com/azerothcore/AzerothGhost/config"
+	"github.com/azerothcore/AzerothGhost/orchestrator"
+	"github.com/azerothcore/AzerothGhost/server"
 )
 
 // Version is set at build time via -ldflags or defaults here for skeleton.

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // UnitSnap is a point-in-time view of a tracked unit for observation helpers.

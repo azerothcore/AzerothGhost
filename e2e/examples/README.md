@@ -1,7 +1,7 @@
 # Example live-stack tests
 
 Runnable patterns for authors (and LLMs) that import
-`github.com/walkline/AzerothGhost/e2e/e2eharness`.
+`github.com/azerothcore/AzerothGhost/e2e/e2eharness`.
 
 These are simplified from real AC regression scenarios. Prefer copying a file
 into **your** module rather than depending on this package path forever.

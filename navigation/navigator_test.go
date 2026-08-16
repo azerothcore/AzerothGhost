@@ -3,7 +3,7 @@ package navigation
 import (
 	"testing"
 
-	"github.com/walkline/AzerothGhost/pathfinding"
+	"github.com/azerothcore/AzerothGhost/pathfinding"
 )
 
 func TestConvertResultRejectsSyntheticStraightPaths(t *testing.T) {

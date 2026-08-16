@@ -2,7 +2,7 @@
 // using github.com/Shopify/go-lua. It exposes bot actions and queries to
 // Lua scripts and allows runtime behavior modification.
 //
-// This is part of github.com/walkline/AzerothGhost.
+// This is part of github.com/azerothcore/AzerothGhost.
 // Existing script syntax (on_tick, bot.* functions) is preserved.
 package luaengine
 
@@ -13,7 +13,7 @@ import (
 
 	lua "github.com/Shopify/go-lua"
 
-	"github.com/walkline/AzerothGhost/ai/behaviortree"
+	"github.com/azerothcore/AzerothGhost/ai/behaviortree"
 )
 
 // BotAPI is the interface that the Lua engine uses to interact with the bot.

@@ -5,7 +5,7 @@ import (
 
 	"github.com/Shopify/go-lua"
 
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 // ScenarioHost provides the Lua-driven scenario execution surface for the orchestrator.

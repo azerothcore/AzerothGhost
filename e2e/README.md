@@ -24,7 +24,7 @@ live regressions live under `e2e/local/` (gitignored).
 | **[examples/](./examples/)** | Runnable example tests (copy patterns into your module) |
 
 ```go
-import "github.com/walkline/AzerothGhost/e2e/e2eharness"
+import "github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 ```
 
 Prefer `ScenarioBot` methods over raw `Session` / package helpers for combat and

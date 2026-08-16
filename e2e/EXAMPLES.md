@@ -1,6 +1,6 @@
 # Using AzerothGhost e2e harness from another project
 
-Import **`github.com/walkline/AzerothGhost/e2e/e2eharness`** to drive protocol-level
+Import **`github.com/azerothcore/AzerothGhost/e2e/e2eharness`** to drive protocol-level
 bots against a live **AzerothCore** 3.3.5a stack (auth + world + MySQL). The
 client speaks pure WotLK 3.3.5a; the world may be standalone AzerothCore or
 AzerothCore fronted by a gateway such as **ToCloud9**.
@@ -16,7 +16,7 @@ Companion: [`LLM_GUIDE.md`](./LLM_GUIDE.md) (compact rules for LLM context).
 
 | Import path | Role |
 |-------------|------|
-| `github.com/walkline/AzerothGhost/e2e/e2eharness` | Login bots, ScenarioBot, waiters, combat/quest/guild helpers |
+| `github.com/azerothcore/AzerothGhost/e2e/e2eharness` | Login bots, ScenarioBot, waiters, combat/quest/guild helpers |
 | `github.com/go-sql-driver/mysql` | Blank-import in tests that open MySQL via the harness |
 
 Harness package has **no** `//go:build e2e` tag — it is always importable.
@@ -24,9 +24,9 @@ Use a build tag only in *your* tests if you want to skip live tests by default.
 
 ```bash
 # In your module
-go get github.com/walkline/AzerothGhost@latest
+go get github.com/azerothcore/AzerothGhost@latest
 # Or pin a commit / use a replace for a local checkout:
-# replace github.com/walkline/AzerothGhost => ../AzerothGhost
+# replace github.com/azerothcore/AzerothGhost => ../AzerothGhost
 ```
 
 ```go
@@ -36,7 +36,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/e2e/e2eharness"
+	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
 ```
 
@@ -85,7 +85,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/e2e/e2eharness"
+	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
 
 func TestMyFeature_SomethingBlizzlike(t *testing.T) {
@@ -345,7 +345,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/walkline/AzerothGhost/e2e/e2eharness"
+	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
 
 func TestQuest_StayAliveFailsOnDeath(t *testing.T) {
@@ -479,7 +479,7 @@ helpers for guild fixtures.
 
 ## Checklist (downstream test)
 
-1. Depend on `github.com/walkline/AzerothGhost` and import `e2e/e2eharness`  
+1. Depend on `github.com/azerothcore/AzerothGhost` and import `e2e/e2eharness`  
 2. Blank-import MySQL driver  
 3. Point `E2E_*` env at **your** AzerothCore (or gateway)  
 4. `NewSolo` / `NewScenario` — not ad-hoc low-level login for simple cases  

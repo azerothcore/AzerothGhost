@@ -12,7 +12,7 @@ Full recipes: [`EXAMPLES.md`](./EXAMPLES.md).
 ## Dependency
 
 ```text
-import "github.com/walkline/AzerothGhost/e2e/e2eharness"
+import "github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 _ "github.com/go-sql-driver/mysql"
 ```
 
@@ -170,7 +170,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/e2e/e2eharness"
+	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
 
 // Issue: https://github.com/azerothcore/azerothcore-wotlk/issues/NNNNN  (optional)

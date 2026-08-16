@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/walkline/AzerothGhost/config"
-	"github.com/walkline/AzerothGhost/orchestrator"
+	"github.com/azerothcore/AzerothGhost/config"
+	"github.com/azerothcore/AzerothGhost/orchestrator"
 )
 
 // runScenario implements `azghost scenario run <file.lua>` (and future subcmds).

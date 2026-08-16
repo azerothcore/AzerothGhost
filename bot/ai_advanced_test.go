@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/walkline/AzerothGhost/ai/luaengine"
+	"github.com/azerothcore/AzerothGhost/ai/luaengine"
 )
 
 // TestAdvancedAIGrindPipeline validates the production advanced AI path:

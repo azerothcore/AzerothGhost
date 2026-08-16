@@ -8,8 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/walkline/AzerothGhost/bot"
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/bot"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 // Server is the HTTP API server for managing bot clients (node mode).

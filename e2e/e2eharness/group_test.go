@@ -3,7 +3,7 @@ package e2eharness
 import (
 	"testing"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 func TestMemberNamesJoin(t *testing.T) {

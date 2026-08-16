@@ -7,7 +7,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
-	"github.com/walkline/AzerothGhost/e2e/e2eharness"
+	"github.com/azerothcore/AzerothGhost/e2e/e2eharness"
 )
 
 // Example: STAY_ALIVE quest fails when the player dies.

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/walkline/AzerothGhost/scenario"
+	"github.com/azerothcore/AzerothGhost/scenario"
 )
 
 func TestServerNavigationDefaultsOverrideLaunchRequestPaths(t *testing.T) {

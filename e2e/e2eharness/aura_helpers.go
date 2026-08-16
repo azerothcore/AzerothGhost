@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/walkline/AzerothGhost/client"
+	"github.com/azerothcore/AzerothGhost/client"
 )
 
 // AssertAuraRemains fails with CONFIRMED BUG if spellID is missing after waiting `after`.
