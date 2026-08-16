@@ -343,10 +343,48 @@ const (
 	// PLAYER_FIELD_COINAGE = UNIT_END + 0x03FE
 	PlayerFieldCoinage = 0x0492
 
+	// PLAYER_VISIBLE_ITEM_1_ENTRYID = UNIT_END + 0x0087. Each paper-doll slot
+	// is entry + enchantment (stride 2). Slot 0 = head … slot 18 = tabard.
+	PlayerVisibleItem1EntryID uint16 = 0x011B
+	PlayerVisibleItemStride   uint16 = 2
+
 	// UNIT_FIELD_AURASTATE (bitmask of aura states). Fast path hint only;
 	// authoritative aura list comes from SMSG_AURA_UPDATE* packets.
 	UnitFieldAuraState = 0x003C // OBJECT_END + 0x0036 (typical); adjust if your build differs
 )
+
+// Equipment slots (3.3.5a SharedDefines.h EQUIPMENT_SLOT_*). These are also the
+// PLAYER_VISIBLE_ITEM index (slot 0 → visible item 1).
+const (
+	EquipmentSlotHead      uint8 = 0
+	EquipmentSlotNeck      uint8 = 1
+	EquipmentSlotShoulders uint8 = 2
+	EquipmentSlotBody      uint8 = 3 // shirt
+	EquipmentSlotChest     uint8 = 4
+	EquipmentSlotWaist     uint8 = 5
+	EquipmentSlotLegs      uint8 = 6
+	EquipmentSlotFeet      uint8 = 7
+	EquipmentSlotWrists    uint8 = 8
+	EquipmentSlotHands     uint8 = 9
+	EquipmentSlotFinger1   uint8 = 10
+	EquipmentSlotFinger2   uint8 = 11
+	EquipmentSlotTrinket1  uint8 = 12
+	EquipmentSlotTrinket2  uint8 = 13
+	EquipmentSlotBack      uint8 = 14
+	EquipmentSlotMainHand  uint8 = 15
+	EquipmentSlotOffHand   uint8 = 16
+	EquipmentSlotRanged    uint8 = 17
+	EquipmentSlotTabard    uint8 = 18
+	EquipmentSlotEnd       uint8 = 19
+)
+
+// PlayerVisibleItemEntryField is PLAYER_VISIBLE_ITEM_(slot+1)_ENTRYID, or 0 if slot is out of range.
+func PlayerVisibleItemEntryField(slot uint8) uint16 {
+	if slot >= EquipmentSlotEnd {
+		return 0
+	}
+	return PlayerVisibleItem1EntryID + uint16(slot)*PlayerVisibleItemStride
+}
 
 // LootMethod values for CMSG_LOOT_METHOD / SMSG_GROUP_LIST (3.3.5a).
 const (
@@ -549,6 +587,33 @@ func (o *WorldObject) value(field uint16) uint32 {
 // consumers. Prefer typed helpers (Health(), IsAlive(), Level(), HasAura()...) when possible.
 func (o *WorldObject) Value(field uint16) uint32 {
 	return o.value(field)
+}
+
+// VisibleItemEntry returns the item entry shown in equipment slot 0..18 from
+// PLAYER_VISIBLE_ITEM_(slot+1)_ENTRYID (0 if unknown, empty, or slot is invalid).
+func (o *WorldObject) VisibleItemEntry(slot uint8) uint32 {
+	if o == nil {
+		return 0
+	}
+	field := PlayerVisibleItemEntryField(slot)
+	if field == 0 {
+		return 0
+	}
+	return o.value(field)
+}
+
+// EquippedSlot returns the first paper-doll slot whose visible entry matches,
+// or false if the item is not shown as worn.
+func (o *WorldObject) EquippedSlot(entry uint32) (uint8, bool) {
+	if o == nil || entry == 0 {
+		return 0, false
+	}
+	for slot := uint8(0); slot < EquipmentSlotEnd; slot++ {
+		if o.VisibleItemEntry(slot) == entry {
+			return slot, true
+		}
+	}
+	return 0, false
 }
 
 // setValue sets under lock.
@@ -2872,6 +2937,33 @@ func (w *WorldClient) SetPvP(on bool) error {
 func (w *WorldClient) SelfIsPvP() bool {
 	obj := w.GetObject(w.CharGUID())
 	return obj != nil && obj.IsPvP()
+}
+
+// VisibleItemEntry returns this session's worn item entry in equipment slot 0..18
+// from PLAYER_VISIBLE_ITEM_* (0 if unknown or empty).
+func (w *WorldClient) VisibleItemEntry(slot uint8) uint32 {
+	return w.UnitVisibleItemEntry(w.CharGUID(), slot)
+}
+
+// UnitVisibleItemEntry returns the worn item entry in slot on guid (0 if unknown).
+func (w *WorldClient) UnitVisibleItemEntry(guid uint64, slot uint8) uint32 {
+	if w == nil || guid == 0 {
+		return 0
+	}
+	return w.GetObject(guid).VisibleItemEntry(slot)
+}
+
+// EquippedSlot returns this session's paper-doll slot showing entry, or false.
+func (w *WorldClient) EquippedSlot(entry uint32) (uint8, bool) {
+	return w.UnitEquippedSlot(w.CharGUID(), entry)
+}
+
+// UnitEquippedSlot returns guid's paper-doll slot showing entry, or false.
+func (w *WorldClient) UnitEquippedSlot(guid uint64, entry uint32) (uint8, bool) {
+	if w == nil || guid == 0 {
+		return 0, false
+	}
+	return w.GetObject(guid).EquippedSlot(entry)
 }
 
 // CancelAura sends CMSG_CANCEL_AURA for spellID.

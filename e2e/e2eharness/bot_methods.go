@@ -241,6 +241,7 @@ func (b *ScenarioBot) CastRetries(t *testing.T, spellID uint32, targetGUID uint6
 }
 
 // EquipEntry adds items and auto-equips from backpack slots (best-effort).
+// Does not wait: use WaitEquipped / WaitEquippedSlot for the paper-doll oracle.
 func (b *ScenarioBot) EquipEntry(t *testing.T, entry, count uint32) {
 	t.Helper()
 	if count == 0 {

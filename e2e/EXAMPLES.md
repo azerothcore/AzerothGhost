@@ -284,7 +284,7 @@ bot.AssertQuestStatus(t, questID, e2eharness.QuestStatusFailed)
 Quest status constants: `QuestStatusIncomplete` (3), `QuestStatusFailed` (5),
 `QuestStatusComplete` (1). DB asserts only after `.save`.
 
-Items: `AddItem`, `AddItemWait`, `EquipEntry`, `SetSkill`, `GiveTotems`.
+Items: `AddItem`, `AddItemWait`, `EquipEntry`, `WaitEquipped` / `WaitEquippedSlot` / `VisibleItemEntry` (paper-doll via `PLAYER_VISIBLE_ITEM_*`), `SetSkill`, `GiveTotems`.
 
 ---
 

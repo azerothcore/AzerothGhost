@@ -184,6 +184,76 @@ func (b *ScenarioBot) InventoryCountNoSave(t *testing.T, entry uint32) int {
 	return n
 }
 
+// VisibleItemEntry returns the worn item entry in equipment slot 0..18 from
+// this bot's PLAYER_VISIBLE_ITEM_* cache (0 if unknown or empty).
+func (b *ScenarioBot) VisibleItemEntry(slot uint8) uint32 {
+	if b == nil || b.World == nil {
+		return 0
+	}
+	return b.World.VisibleItemEntry(slot)
+}
+
+// EquippedSlot returns the paper-doll slot showing entry on this bot, or false.
+func (b *ScenarioBot) EquippedSlot(entry uint32) (uint8, bool) {
+	if b == nil || b.World == nil {
+		return 0, false
+	}
+	return b.World.EquippedSlot(entry)
+}
+
+// WaitEquipped waits until entry is shown in any paper-doll slot (0..18) on this
+// bot. Returns the slot. Prefer this over CharDB character_inventory after Save.
+func (b *ScenarioBot) WaitEquipped(t *testing.T, entry uint32, timeout time.Duration) uint8 {
+	t.Helper()
+	return WaitUnitEquipped(t, b.World, b.GUID, entry, timeout)
+}
+
+// WaitEquippedSlot waits until entry is shown in the given paper-doll slot.
+func (b *ScenarioBot) WaitEquippedSlot(t *testing.T, entry uint32, slot uint8, timeout time.Duration) {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	var last uint32
+	for time.Now().Before(deadline) {
+		last = b.VisibleItemEntry(slot)
+		if last == entry {
+			t.Logf("equipped entry=%d visible slot=%d", entry, slot)
+			return
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	Assertf(t, "entry %d not in visible slot %d within %s (got=%d)", entry, slot, timeout, last)
+}
+
+// WaitUnitEquipped waits until guid shows entry in any paper-doll slot.
+func (b *ScenarioBot) WaitUnitEquipped(t *testing.T, guid uint64, entry uint32, timeout time.Duration) uint8 {
+	t.Helper()
+	return WaitUnitEquipped(t, b.World, guid, entry, timeout)
+}
+
+// WaitUnitEquipped is the package-level waiter (self or another nearby player).
+func WaitUnitEquipped(t *testing.T, w *client.WorldClient, guid uint64, entry uint32, timeout time.Duration) uint8 {
+	t.Helper()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if w == nil || guid == 0 || entry == 0 {
+		Assertf(t, "WaitUnitEquipped: world/guid/entry empty")
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if slot, ok := w.UnitEquippedSlot(guid, entry); ok {
+			t.Logf("unit 0x%X equipped entry=%d visible slot=%d", guid, entry, slot)
+			return slot
+		}
+		time.Sleep(40 * time.Millisecond)
+	}
+	Assertf(t, "unit 0x%X entry %d not in visible paper-doll within %s", guid, entry, timeout)
+	return 0
+}
+
 // CharacterMoney reads characters.money for guid.
 func CharacterMoney(db *sql.DB, guid uint64) (uint32, error) {
 	var m uint32
