@@ -455,36 +455,68 @@ func TestArena_RatedQueuePopsForBothTeams(t *testing.T) {
 	b1, b2 := e2eharness.ByRole(t, bots, "b1"), e2eharness.ByRole(t, bots, "b2")
 
 	e2eharness.EnableArenaSeason(t, a1)
-	t.Cleanup(func() {
-		for _, b := range bots {
-			b.LeaveBattlefieldQueue(t) // an invited group holds its bracket until its last member leaves
-		}
-	})
 	e2eharness.CreateArenaTeam(t, a1, a2, e2eharness.UniqueArenaTeamName("ArQA"), client.ArenaTeam2v2)
 	e2eharness.CreateArenaTeam(t, b1, b2, e2eharness.UniqueArenaTeamName("ArQB"), client.ArenaTeam2v2)
 	e2eharness.FormParty(t, a1, a2)
 	e2eharness.FormParty(t, b1, b2)
+
+	// CreateArenaTeam's cleanup takes both members out of the queue, invited or not, so the
+	// bracket is empty again for the next test.
 	battlemaster := e2eharness.TeleportToArenaBattlemaster(t, bots...)
-
-	a1.JoinRatedArena(t, battlemaster, client.ArenaSlot2v2)
-	b1.JoinRatedArena(t, battlemaster, client.ArenaSlot2v2)
 	for _, leader := range []*e2eharness.ScenarioBot{a1, b1} {
-		if _, ok := leader.TryWaitBattlefieldStatus(client.BattlegroundStatusWaitQueue, 0); !ok {
-			e2eharness.Preconditionf(t, "%s never entered the queue", leader.Name)
-		}
+		leader.JoinRatedArena(t, battlemaster, client.ArenaSlot2v2)
+		// A refused rated join is answered with no WAIT_QUEUE, and this names the reason.
+		leader.WaitBattlefieldStatus(t, client.BattlegroundStatusWaitQueue, 0)
 	}
 
-	// Oracle: the matchmaker pairs the two teams and invites both to the same arena.
-	gotA, okA := a1.TryWaitBattlefieldStatus(client.BattlegroundStatusWaitJoin, 30*time.Second)
-	gotB, okB := b1.TryWaitBattlefieldStatus(client.BattlegroundStatusWaitJoin, 30*time.Second)
-	if !okA || !okB {
-		e2eharness.Assertf(t, "rated arena never popped for both teams: a1=%v b1=%v", okA, okB)
+	// Oracle: the matchmaker pairs the two teams and invites both to the same arena. Wait on
+	// both at once: they watch the same queue sweeps, so waiting in turn would spend a whole
+	// timeout on each team that was not invited instead of one timeout in total.
+	got, ok := e2eharness.TryWaitBattlefieldStatusEach([]*e2eharness.ScenarioBot{a1, b1},
+		client.BattlegroundStatusWaitJoin, e2eharness.DefaultBattlefieldTimeout)
+
+	if !ok[0] || !ok[1] {
+		e2eharness.Assertf(t, "rated arena never popped for both teams: a1=%v b1=%v", ok[0], ok[1])
 	}
-	if gotA.MapID != gotB.MapID {
-		e2eharness.Assertf(t, "teams were invited to different arenas: %d vs %d", gotA.MapID, gotB.MapID)
+	// Two teams in one arena share its map, so different maps mean each was paired with a
+	// team that was already in the bracket. That says nothing about the two of ours, so it is
+	// a dirty realm rather than a core failure.
+	if got[0].MapID != got[1].MapID {
+		e2eharness.Preconditionf(t, "the two teams were invited to different arena maps (%d and "+
+			"%d), so the rated bracket was not empty when this test started", got[0].MapID, got[1].MapID)
 	}
 }
 ```
+
+### g) Putting a rated team at a chosen matchmaker rating
+
+`SeedMatchmakerRating` is the only lever on the rating the queue pairs on. No GM command
+sets it, and writing `arena_team` does not reach a team the realm already has loaded.
+
+The rating is read once, as the member joins the team, and never again, so **seed every
+member before `CreateArenaTeam`**. Seeding afterwards is refused rather than silently doing
+nothing, and so is a rating outside `MinSeedableRating` to `MaxSeedableRating`.
+
+```go
+// Both members of a team get the same rating: the queue pairs on the team average of the
+// online party members.
+for _, role := range []string{"lo1", "lo2"} {
+	e2eharness.SeedMatchmakerRating(t,
+		e2eharness.ByRole(t, bots, role), client.ArenaTeam2v2, 1500)
+}
+loTeam := e2eharness.CreateArenaTeam(t, lo1, lo2,
+	e2eharness.UniqueArenaTeamName("ArGlo"), client.ArenaTeam2v2)
+```
+
+The seeded row is deleted on cleanup, and `MatchmakerRating` reads it back. It returns 0
+when the character has no row, which is when the realm falls back to
+`Arena.ArenaStartMatchmakerRating`.
+
+A window such as `Arena.MaxRatingDifference` is not seedable and no GM command reads it
+back. A test that needs one assumes the `worldserver.conf.dist` value, and fails as a
+precondition when the realm does not behave that way. For a realm on another value, the
+config reader prefers `AC_UPPER_SNAKE` environment variables over the config file, so export
+the same value to worldserver and to `go test` rather than rewriting the live config.
 
 ---
 
