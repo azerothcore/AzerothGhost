@@ -432,7 +432,15 @@ func (b *ScenarioBot) DamageToFraction(t *testing.T, guid uint64, frac float64, 
 			return
 		}
 		b.Damage(t, guid, chunk)
-		time.Sleep(50 * time.Millisecond)
+		// Size the next hit only once this one reaches the object cache. Against a stale health
+		// every chunk lands, and on a slow world tick five chunks of max/5 kill the unit.
+		hitDeadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(hitDeadline) {
+			if cur, _ := b.UnitHP(guid); cur < hp {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 	}
 	hp, max := b.UnitHP(guid)
 	Preconditionf(t, "DamageToFraction: still hp=%d/%d want frac<=%.2f", hp, max, frac)
