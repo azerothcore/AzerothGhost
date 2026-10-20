@@ -2488,22 +2488,39 @@ func (w *WorldClient) SetTarget(targetGUID uint64) error {
 	return w.sendPacket(CmsgSetSelection, buf.Bytes())
 }
 
-// CastSpell sends CMSG_CAST_SPELL for the given spell targeting a unit
-func (w *WorldClient) CastSpell(spellID uint32, targetGUID uint64) error {
+const (
+	spellTargetFlagSelf       uint32 = 0x0000
+	spellTargetFlagUnit       uint32 = 0x0002
+	spellTargetFlagGameObject uint32 = 0x0800
+)
+
+func buildCastSpellGUIDPayload(spellID, targetFlag uint32, targetGUID uint64) []byte {
 	buf := new(bytes.Buffer)
 	buf.WriteByte(0) // castCount
 	binary.Write(buf, binary.LittleEndian, spellID)
 	buf.WriteByte(0) // castFlags
-
-	// Target flags: unit target
+	binary.Write(buf, binary.LittleEndian, targetFlag)
 	if targetGUID != 0 {
-		binary.Write(buf, binary.LittleEndian, uint32(0x0002)) // TARGET_FLAG_UNIT
 		writePackedGUID(buf, targetGUID)
-	} else {
-		binary.Write(buf, binary.LittleEndian, uint32(0x0000)) // TARGET_FLAG_SELF
 	}
+	return buf.Bytes()
+}
 
-	return w.sendPacket(CmsgCastSpell, buf.Bytes())
+// CastSpell sends CMSG_CAST_SPELL for the given spell targeting a unit.
+func (w *WorldClient) CastSpell(spellID uint32, targetGUID uint64) error {
+	targetFlag := spellTargetFlagSelf
+	if targetGUID != 0 {
+		targetFlag = spellTargetFlagUnit
+	}
+	return w.sendPacket(CmsgCastSpell, buildCastSpellGUIDPayload(spellID, targetFlag, targetGUID))
+}
+
+// CastSpellOnGameObject sends CMSG_CAST_SPELL with a gameobject target.
+func (w *WorldClient) CastSpellOnGameObject(spellID uint32, targetGUID uint64) error {
+	if targetGUID == 0 {
+		return fmt.Errorf("CastSpellOnGameObject: target GUID is 0")
+	}
+	return w.sendPacket(CmsgCastSpell, buildCastSpellGUIDPayload(spellID, spellTargetFlagGameObject, targetGUID))
 }
 
 // AutoEquipItem sends CMSG_AUTOEQUIP_ITEM for a bag/slot inventory location.

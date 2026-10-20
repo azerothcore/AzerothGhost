@@ -80,7 +80,7 @@ Legacy: `PadStormwindOutskirts` (= AbandonHouse) — prefer `PackagePad`
 
 **Arena / battleground queue (multi-bot):** `EnableArenaSeason(t, bot)` (season + battlemaster event, restored on cleanup) · `CreateArenaTeam(t, leader, member, UniqueArenaTeamName("Pfx"), client.ArenaTeam2v2)` (two members, both at max level, disbanded on cleanup, which also dequeues them) · `ArenaTeamRating` · `TeleportToArenaBattlemaster(t, bots…)` · `JoinRatedArena(t, battlemasterGUID, client.ArenaSlot2v2)` · **`WaitBattlefieldStatus(t, client.BattlegroundStatusWaitQueue|WaitJoin, timeout)`** / `TryWaitBattlefieldStatus` (scan every status received so far, so a status that landed before the call still matches) · `DrainBattlefieldStatuses` before re-queueing · `LeaveBattlefieldQueue` on cleanup for every member (an invited group holds its bracket until its last member leaves). A refused join is named in the wait failure (`SMSG_GROUP_JOINED_BATTLEGROUND` / `SMSG_ARENA_ERROR`); a join the server drops silently (battlemaster not in the bot's map, rated without a party, sender not the party leader, season not in progress, already in a BG) is not.
 
-**Loot / rolls:** after kill → **`WaitUnitLootable`** then `OpenLoot` · `LootRelease` · `LootTakeItem` · `WaitLootStartRoll` · `RollNeed`/`RollGreed`/`RollPass` · `WaitLootRollWon` · `WaitLootAllPassed` · `MasterLootGive`
+**Loot / rolls:** after kill → **`WaitUnitLootable`** then `OpenLoot` · gameobject loot → `OpenGameObjectLoot` / `TryOpenGameObjectLoot` · `LootRelease` · `LootTakeItem` · `WaitLootStartRoll` · `RollNeed`/`RollGreed`/`RollPass` · `WaitLootRollWon` · `WaitLootAllPassed` · `MasterLootGive`
 
 **Pets:** `WaitPlayerPet` · `PlayerPetGUID` · `DismissPet` · `WaitNoPlayerPet` · `AssertNoPlayerPet` · `PetAttack`
 

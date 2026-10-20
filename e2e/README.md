@@ -140,6 +140,7 @@ warlock := e2eharness.ByRole(t, bots, "warlock")
 |--------|-----|
 | Unit cast | `bot.Cast` / `bot.CastMust` / `bot.CastOrGM` |
 | Ground AoE | `bot.CastAtPosition` |
+| Gameobject loot | `bot.OpenGameObjectLoot` / `bot.TryOpenGameObjectLoot` |
 | Spawn + GUID | `bot.Spawn(t, entry, timeout)` / `bot.WaitUnit` / `bot.WaitUnitAny` |
 | Boss pull | `bot.CombatReady` → `bot.Engage` |
 | GM damage kill | `bot.Damage` / `bot.DamageKill` (**never** toggles `.gm on`) |

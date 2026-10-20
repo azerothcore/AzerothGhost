@@ -8,6 +8,71 @@ import (
 	"github.com/azerothcore/AzerothGhost/client"
 )
 
+// SpellOpening is the client spell used to open lootable gameobjects.
+const SpellOpening uint32 = 3365
+
+// OpenGameObjectLoot casts Opening on a gameobject and waits for its loot window.
+func (b *ScenarioBot) OpenGameObjectLoot(t *testing.T, gameObjectGUID uint64, timeout time.Duration) []client.LootItem {
+	t.Helper()
+	items, ok := b.TryOpenGameObjectLoot(t, gameObjectGUID, timeout)
+	if !ok {
+		HarnessFailf(t, "OpenGameObjectLoot failed for guid=0x%X", gameObjectGUID)
+	}
+	return items
+}
+
+// TryOpenGameObjectLoot is like OpenGameObjectLoot but returns false on cast failure or timeout.
+func (b *ScenarioBot) TryOpenGameObjectLoot(t *testing.T, gameObjectGUID uint64, timeout time.Duration) (items []client.LootItem, ok bool) {
+	t.Helper()
+	if gameObjectGUID == 0 {
+		HarnessFailf(t, "TryOpenGameObjectLoot: gameobject GUID is 0")
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	type lootResult struct {
+		items []client.LootItem
+	}
+	lootCh := make(chan lootResult, 1)
+	cancelLoot := b.World.AddLootOpenedHook(func(guid uint64, items []client.LootItem) {
+		if guid == gameObjectGUID {
+			select {
+			case lootCh <- lootResult{items: items}:
+			default:
+			}
+		}
+	})
+	defer cancelLoot()
+
+	castFailureCh := make(chan uint8, 1)
+	cancelCast := b.World.AddSpellCastResultHook(func(spellID uint32, success bool, failReason uint8) {
+		if spellID == SpellOpening && !success {
+			select {
+			case castFailureCh <- failReason:
+			default:
+			}
+		}
+	})
+	defer cancelCast()
+
+	if err := b.World.CastSpellOnGameObject(SpellOpening, gameObjectGUID); err != nil {
+		HarnessFailf(t, "CastSpellOnGameObject: %v", err)
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case result := <-lootCh:
+		return result.items, true
+	case failReason := <-castFailureCh:
+		t.Logf("Opening failed reason=%d (%s)", failReason, SpellFailReasonName(failReason))
+		return nil, false
+	case <-timer.C:
+		return nil, false
+	}
+}
+
 // OpenLoot sends CMSG_LOOT and waits for OnLootOpened (or times out fatally).
 func (b *ScenarioBot) OpenLoot(t *testing.T, lootGUID uint64, timeout time.Duration) []client.LootItem {
 	t.Helper()
